@@ -179,6 +179,251 @@ def _check_lvgl_version(dev, baud):
             f"Unsupported LVGL version {ver!r} \u2014 disco ui requires LVGL 9+")
 
 
+# These scripts are injected through raw REPL and are never frozen into
+# firmware. They use only generic LVGL APIs and MicroPython's json module.
+# Tree nodes are emitted individually so large menus do not exhaust board RAM.
+_STREAMED_TREE_SCRIPT = """\
+import lvgl as lv
+import json
+
+def _text(obj):
+    try:
+        return obj.get_text()
+    except Exception:
+        return None
+
+def _emit(obj, path):
+    node = {'path': path, 'type': obj.__class__.__name__}
+    text = _text(obj)
+    if text is not None:
+        node['text'] = text
+    print(json.dumps(node))
+    for i in range(obj.get_child_count()):
+        _emit(obj.get_child(i), path + [i])
+
+_emit($ROOT, [])
+"""
+
+_CLICK_PATH_SCRIPT = """\
+import lvgl as lv
+root = $ROOT
+widget = root
+for index in $PATH:
+    widget = widget.get_child(index)
+widget.send_event(lv.EVENT.CLICKED, None)
+try:
+    import udisplay
+    for _ in range(12):
+        udisplay.update(30)
+except Exception:
+    pass
+print('OK')
+"""
+
+_WRITE_PATH_SCRIPT = """\
+import lvgl as lv
+root = $ROOT
+widget = root
+for index in $PATH:
+    widget = widget.get_child(index)
+widget.set_text($TEXT)
+try:
+    import udisplay
+    udisplay.update(30)
+except Exception:
+    pass
+print('OK')
+"""
+
+
+def _parse_streamed_tree(output, layer):
+    lines = [line for line in output.splitlines() if line.strip()]
+    if not lines:
+        raise click.ClickException("UI tree request returned no response")
+
+    nodes = {}
+    for line in lines:
+        try:
+            node = json_mod.loads(line)
+        except json_mod.JSONDecodeError as error:
+            raise click.ClickException(
+                f"UI tree request returned invalid JSON: {line!r}"
+            ) from error
+        path = tuple(node.get("path", []))
+        node["path"] = list(path)
+        node["children"] = []
+        nodes[path] = node
+
+    root = nodes.get(())
+    if root is None:
+        raise click.ClickException("UI tree request did not include a root node")
+
+    for path, node in nodes.items():
+        if not path:
+            continue
+        parent = nodes.get(path[:-1])
+        if parent is None:
+            raise click.ClickException("UI tree request has an orphaned node")
+        parent["children"].append(node)
+    return {"layer": layer, "root": root}
+
+
+def _widget_summary(node):
+    return {key: node.get(key) for key in ("path", "type", "x", "y", "text")}
+
+
+def _node_at_path(root, path):
+    node = root
+    for index in path:
+        if not isinstance(index, int) or index < 0 or index >= len(node["children"]):
+            return None
+        node = node["children"][index]
+    return node
+
+
+def _find_by_text(node, text, parent=None):
+    if node.get("text") == text:
+        if "label" in node["type"].lower() and parent is not None:
+            return parent
+        return node
+    for child in node["children"]:
+        found = _find_by_text(child, text, node)
+        if found is not None:
+            return found
+    return None
+
+
+def _select_widget(root, request):
+    text = request.get("text")
+    path = request.get("path")
+    x = request.get("x")
+    y = request.get("y")
+    selector_count = int(text is not None) + int(path is not None) + int(x is not None or y is not None)
+    if selector_count != 1:
+        return None, "Provide exactly one selector: text, path, or x+y"
+    if (x is None) != (y is None):
+        return None, "Provide both x and y"
+    if text is not None:
+        widget = _find_by_text(root, text)
+    elif path is not None:
+        widget = _node_at_path(root, path)
+    else:
+        return None, "Coordinate selection is unavailable on hardware"
+    if widget is None:
+        return None, "Widget not found"
+    return widget, None
+
+
+def _click_target(root, widget):
+    path = widget["path"]
+    while path:
+        candidate = _node_at_path(root, path)
+        if "button" in candidate["type"].lower():
+            return candidate
+        path = path[:-1]
+    return widget
+
+
+def _textareas(node, result):
+    if "textarea" in node["type"].lower():
+        result.append(node)
+    for child in node["children"]:
+        _textareas(child, result)
+
+
+def _tree_request(dev, layer, baud, timeout):
+    script = (
+        _STREAMED_TREE_SCRIPT
+        .replace("$ROOT", _root_expr(layer))
+    )
+    try:
+        output = repl_backend.exec_raw(dev, script, baud, timeout)
+    except RuntimeError as error:
+        raise click.ClickException(str(error))
+    return _parse_streamed_tree(output, layer)
+
+
+def _run_path_script(dev, script, baud, timeout, action):
+    try:
+        output = repl_backend.exec_raw(dev, script, baud, timeout)
+    except RuntimeError as error:
+        raise click.ClickException(str(error))
+    if output.strip().splitlines()[-1:] != ["OK"]:
+        raise click.ClickException(f"{action} failed: {output.strip()}")
+
+
+def _generic_control_request(dev, request, baud, timeout):
+    """Handle portable UI control with generic transient LVGL scripts."""
+    action = request.get("action")
+    if action == "capabilities":
+        return {
+            "ok": True,
+            "ui": {
+                "tree": True, "find": True,
+                "click": ["text", "path"],
+                "write_text": ["path", "textarea_index"],
+                "layers": ["screen", "top"],
+            },
+            "application": False,
+        }
+    if action in ("get_state", "navigate", "set_state"):
+        return {"ok": False, "error": "Unsupported action on hardware: " + action}
+
+    layer = request.get("layer", "screen")
+    if layer not in ("screen", "top"):
+        return {"ok": False, "error": "Unknown layer: " + str(layer)}
+    tree = _tree_request(dev, layer, baud, timeout)
+    root = tree["root"]
+
+    if action == "tree":
+        return {"ok": True, "tree": tree}
+    if action == "find":
+        widget, error = _select_widget(root, request)
+        return {"ok": False, "error": error} if error else {
+            "ok": True, "layer": layer, "widget": _widget_summary(widget)
+        }
+    if action == "click":
+        widget, error = _select_widget(root, request)
+        if error:
+            return {"ok": False, "error": error}
+        target = _click_target(root, widget)
+        script = (
+            _CLICK_PATH_SCRIPT
+            .replace("$ROOT", _root_expr(layer))
+            .replace("$PATH", repr(target["path"]))
+        )
+        _run_path_script(dev, script, baud, timeout, "UI click")
+        return {
+            "ok": True, "layer": layer,
+            "widget": _widget_summary(widget),
+            "clicked": _widget_summary(target),
+        }
+    if action == "write_text":
+        path = request.get("path")
+        if path is not None:
+            textarea = _node_at_path(root, path)
+            if textarea is None:
+                return {"ok": False, "error": "Widget not found"}
+            if "textarea" not in textarea["type"].lower():
+                return {"ok": False, "error": "Widget at path is not a textarea"}
+        else:
+            textareas = []
+            _textareas(root, textareas)
+            target = request.get("target", 0)
+            if not isinstance(target, int) or target < 0 or target >= len(textareas):
+                return {"ok": False, "error": "Textarea index out of range"}
+            textarea = textareas[target]
+        script = (
+            _WRITE_PATH_SCRIPT
+            .replace("$ROOT", _root_expr(layer))
+            .replace("$PATH", repr(textarea["path"]))
+            .replace("$TEXT", repr(request.get("text", "")))
+        )
+        _run_path_script(dev, script, baud, timeout, "UI text write")
+        return {"ok": True, "layer": layer, "widget": _widget_summary(textarea)}
+    return {"ok": False, "error": "Unknown action: " + str(action)}
+
+
 @click.group()
 def ui():
     """LVGL remote control.
@@ -194,6 +439,34 @@ def ui():
       disco ui write "hello"    # set text on a textarea
     """
     pass
+
+
+@ui.command("control")
+@click.argument("request_json")
+@click.option("--timeout", "-t", default=10, type=int, help="Response timeout in seconds")
+def ui_control(request_json: str, timeout: int):
+    """Send a canonical generic UI-control request to LVGL firmware.
+
+    It sends temporary LVGL-only scripts over raw REPL and never requires an
+    application-specific control module in flashed firmware.
+
+    \b
+    Examples:
+      disco ui control '{"action":"tree"}'
+      disco ui control '{"action":"click","text":"Manage Device"}'
+      disco ui control '{"action":"write_text","path":[1,0],"text":"Name"}'
+    """
+    try:
+        request = json_mod.loads(request_json)
+    except json_mod.JSONDecodeError as error:
+        raise click.ClickException(f"Invalid request JSON: {error.msg}") from error
+    if not isinstance(request, dict):
+        raise click.ClickException("Request JSON must be an object")
+
+    dev = _ser.require_device()
+    _check_lvgl_version(dev, _ser.baud)
+    response = _generic_control_request(dev, request, _ser.baud, timeout)
+    click.echo(json_mod.dumps(response, sort_keys=True))
 
 
 @ui.command("screen")

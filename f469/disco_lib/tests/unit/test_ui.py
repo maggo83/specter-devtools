@@ -11,7 +11,7 @@ from click.testing import CliRunner
 from unittest.mock import patch, MagicMock
 
 from disco_lib.commands.ui import (
-    ui_screen, ui_click, ui_write, ui_screenshot,
+    ui_screen, ui_click, ui_write, ui_screenshot, ui_control,
     _raw_to_png, _FB_SIZE, _FB_WIDTH, _FB_HEIGHT, _FB_BPP,
 )
 
@@ -168,6 +168,51 @@ class TestUIScreen:
         result = runner.invoke(ui_screen, [])
         assert result.exit_code != 0
         assert "Cannot detect LVGL" in result.output
+
+
+class TestGenericControl:
+    """Tests for the generic JSON UI-control adapter."""
+
+    def test_forwards_json_request_without_firmware_module(self, mock_repl):
+        mock_repl._version_then('{"path":[],"type":"screen"}')
+
+        runner = CliRunner()
+        result = runner.invoke(ui_control, ['{"action":"tree"}'])
+
+        assert result.exit_code == 0
+        assert json.loads(result.output)["ok"] is True
+        script = mock_repl.exec_raw.call_args_list[-1].args[1]
+        assert "import lvgl as lv" in script
+        assert "MockUI" not in script
+
+    def test_hardware_capabilities_do_not_advertise_coordinate_clicks(self, mock_repl):
+        mock_repl._version_then("unused")
+
+        runner = CliRunner()
+        result = runner.invoke(ui_control, ['{"action":"capabilities"}'])
+
+        assert result.exit_code == 0
+        assert json.loads(result.output)["ui"]["click"] == ["text", "path"]
+
+    def test_application_action_returns_hardware_unsupported_response(self, mock_repl):
+        mock_repl._version_then("unused")
+
+        runner = CliRunner()
+        result = runner.invoke(ui_control, ['{"action":"get_state"}'])
+
+        assert result.exit_code == 0
+        assert json.loads(result.output) == {
+            "ok": False,
+            "error": "Unsupported action on hardware: get_state",
+        }
+
+    def test_rejects_invalid_request_json(self):
+        runner = CliRunner()
+
+        result = runner.invoke(ui_control, ["not-json"])
+
+        assert result.exit_code != 0
+        assert "Invalid request JSON" in result.output
 
 
 # ===========================================================================
