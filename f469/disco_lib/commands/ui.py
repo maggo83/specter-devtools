@@ -100,9 +100,10 @@ else:
     print('OK')
     try:
         import udisplay
-        udisplay.update(30)
-    except Exception:
+    except ImportError:
         pass
+    else:
+        udisplay.update(30)
 """
 
 # MicroPython script: click widget by tree index path (runs on device)
@@ -122,9 +123,10 @@ if w is not None:
     print('OK')
     try:
         import udisplay
-        udisplay.update(30)
-    except Exception:
+    except ImportError:
         pass
+    else:
+        udisplay.update(30)
 """
 
 # MicroPython script: find textarea and set text (runs on device)
@@ -149,9 +151,10 @@ else:
     tas[idx].set_text($TEXT)
     try:
         import udisplay
-        udisplay.update(30)
-    except Exception:
+    except ImportError:
         pass
+    else:
+        udisplay.update(30)
     print('OK')
 """
 
@@ -213,10 +216,11 @@ for index in $PATH:
 widget.send_event(lv.EVENT.CLICKED, None)
 try:
     import udisplay
+except ImportError:
+    pass
+else:
     for _ in range(12):
         udisplay.update(30)
-except Exception:
-    pass
 print('OK')
 """
 
@@ -229,9 +233,10 @@ for index in $PATH:
 widget.set_text($TEXT)
 try:
     import udisplay
-    udisplay.update(30)
-except Exception:
+except ImportError:
     pass
+else:
+    udisplay.update(30)
 print('OK')
 """
 

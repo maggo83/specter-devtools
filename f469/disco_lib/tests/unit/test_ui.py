@@ -634,3 +634,43 @@ class TestScreenshotCommand:
 
         assert halted_during_dump == [True], "CPU should be halted during dump"
         assert not ocd_mock_raw.halted, "CPU should be resumed after command"
+
+
+class TestTransientRedraw:
+    """Redraw errors must surface instead of being reported as OK."""
+
+    @staticmethod
+    def _run_click_path_script(monkeypatch, capsys, udisplay_module):
+        import sys
+        import types
+        from disco_lib.commands.ui import _CLICK_PATH_SCRIPT
+
+        widget = MagicMock()
+        widget.get_child.return_value = widget
+        lvgl = types.ModuleType("lvgl")
+        lvgl.EVENT = types.SimpleNamespace(CLICKED=7)
+        monkeypatch.setitem(sys.modules, "lvgl", lvgl)
+        monkeypatch.setitem(sys.modules, "udisplay", udisplay_module)
+        script = (_CLICK_PATH_SCRIPT
+                  .replace("$ROOT", "_root")
+                  .replace("$PATH", "[0]"))
+        exec(script, {"_root": widget})
+        widget.send_event.assert_called_once_with(7, None)
+        return capsys.readouterr().out
+
+    def test_missing_udisplay_is_tolerated(self, monkeypatch, capsys):
+        out = self._run_click_path_script(monkeypatch, capsys, None)
+        assert out.strip() == "OK"
+
+    def test_redraw_error_is_not_swallowed(self, monkeypatch, capsys):
+        import types
+
+        udisplay = types.ModuleType("udisplay")
+
+        def update(_dt):
+            raise RuntimeError("redraw failed")
+
+        udisplay.update = update
+        with pytest.raises(RuntimeError, match="redraw failed"):
+            self._run_click_path_script(monkeypatch, capsys, udisplay)
+        assert "OK" not in capsys.readouterr().out
