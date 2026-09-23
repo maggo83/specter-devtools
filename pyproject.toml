@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "specter-devtools"
+version = "0.1.0"
+description = "Shared simulator and hardware development tooling for Specter"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Grug 2-Clause License; f469/ and simulator/ contain MIT-licensed material" }
+authors = [{ name = "Specter contributors" }]
+
+[project.scripts]
+specter-devtools = "specter_devtools.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "f469"]
+testpaths = ["tests", "simulator", "f469/disco_lib/tests/unit"]
