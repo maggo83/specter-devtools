@@ -636,31 +636,36 @@ class TestScreenshotCommand:
         assert not ocd_mock_raw.halted, "CPU should be resumed after command"
 
 
-class TestTransientRedraw:
-    """Redraw errors must surface instead of being reported as OK."""
+class TestTransientActionScripts:
+    """Transient click scripts must pause LVGL timers and surface redraw errors."""
 
     @staticmethod
-    def _run_click_path_script(monkeypatch, capsys, udisplay_module):
+    def _install_fakes(monkeypatch, udisplay_module):
         import sys
         import types
-        from disco_lib.commands.ui import _CLICK_PATH_SCRIPT
 
-        widget = MagicMock()
-        widget.get_child.return_value = widget
         lvgl = types.ModuleType("lvgl")
         lvgl.EVENT = types.SimpleNamespace(CLICKED=7)
+        lvgl.timer_states = []
+        lvgl.timer_enable = lvgl.timer_states.append
         monkeypatch.setitem(sys.modules, "lvgl", lvgl)
         monkeypatch.setitem(sys.modules, "udisplay", udisplay_module)
-        script = (_CLICK_PATH_SCRIPT
-                  .replace("$ROOT", "_root")
-                  .replace("$PATH", "[0]"))
+        return lvgl
+
+    @staticmethod
+    def _exec_click_path(widget):
+        from disco_lib.commands.ui import _CLICK_PATH_SCRIPT
+
+        widget.get_child.return_value = widget
+        script = _CLICK_PATH_SCRIPT.replace("$ROOT", "_root").replace("$PATH", "[0]")
         exec(script, {"_root": widget})
-        widget.send_event.assert_called_once_with(7, None)
-        return capsys.readouterr().out
 
     def test_missing_udisplay_is_tolerated(self, monkeypatch, capsys):
-        out = self._run_click_path_script(monkeypatch, capsys, None)
-        assert out.strip() == "OK"
+        self._install_fakes(monkeypatch, None)
+        widget = MagicMock()
+        self._exec_click_path(widget)
+        widget.send_event.assert_called_once_with(7, None)
+        assert capsys.readouterr().out.strip() == "OK"
 
     def test_redraw_error_is_not_swallowed(self, monkeypatch, capsys):
         import types
@@ -671,6 +676,24 @@ class TestTransientRedraw:
             raise RuntimeError("redraw failed")
 
         udisplay.update = update
+        self._install_fakes(monkeypatch, udisplay)
         with pytest.raises(RuntimeError, match="redraw failed"):
-            self._run_click_path_script(monkeypatch, capsys, udisplay)
+            self._exec_click_path(MagicMock())
         assert "OK" not in capsys.readouterr().out
+
+    def test_timers_paused_while_click_handler_runs(self, monkeypatch):
+        lvgl = self._install_fakes(monkeypatch, None)
+        widget = MagicMock()
+        seen = []
+        widget.send_event.side_effect = lambda *_: seen.append(list(lvgl.timer_states))
+        self._exec_click_path(widget)
+        assert seen == [[False]]
+        assert lvgl.timer_states == [False, True]
+
+    def test_timers_reenabled_when_click_handler_fails(self, monkeypatch):
+        lvgl = self._install_fakes(monkeypatch, None)
+        widget = MagicMock()
+        widget.send_event.side_effect = RuntimeError("handler failed")
+        with pytest.raises(RuntimeError, match="handler failed"):
+            self._exec_click_path(widget)
+        assert lvgl.timer_states == [False, True]

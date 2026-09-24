@@ -66,6 +66,9 @@ else:
         _walk(scr.get_child(i), 0, i, [], False)
 """
 
+# Action scripts pause LVGL timers: the board's scheduled display update would
+# otherwise run app timers mid-handler, e.g. against half-rebuilt screens.
+
 # MicroPython script: find widget by label text and click it (runs on device)
 _CLICK_SCRIPT = """\
 import lvgl as lv
@@ -96,7 +99,11 @@ if w is None:
     print('NOT_FOUND')
 else:
     target = _clickable(w)
-    target.send_event(lv.EVENT.CLICKED, None)
+    lv.timer_enable(False)
+    try:
+        target.send_event(lv.EVENT.CLICKED, None)
+    finally:
+        lv.timer_enable(True)
     print('OK')
     try:
         import udisplay
@@ -119,7 +126,11 @@ for i in path:
         break
     w = w.get_child(i)
 if w is not None:
-    w.send_event(lv.EVENT.CLICKED, None)
+    lv.timer_enable(False)
+    try:
+        w.send_event(lv.EVENT.CLICKED, None)
+    finally:
+        lv.timer_enable(True)
     print('OK')
     try:
         import udisplay
@@ -148,7 +159,11 @@ if not tas:
 elif idx >= len(tas):
     print('INDEX_OUT_OF_RANGE:%d' % len(tas))
 else:
-    tas[idx].set_text($TEXT)
+    lv.timer_enable(False)
+    try:
+        tas[idx].set_text($TEXT)
+    finally:
+        lv.timer_enable(True)
     try:
         import udisplay
     except ImportError:
@@ -213,7 +228,11 @@ root = $ROOT
 widget = root
 for index in $PATH:
     widget = widget.get_child(index)
-widget.send_event(lv.EVENT.CLICKED, None)
+lv.timer_enable(False)
+try:
+    widget.send_event(lv.EVENT.CLICKED, None)
+finally:
+    lv.timer_enable(True)
 try:
     import udisplay
 except ImportError:
@@ -230,7 +249,11 @@ root = $ROOT
 widget = root
 for index in $PATH:
     widget = widget.get_child(index)
-widget.set_text($TEXT)
+lv.timer_enable(False)
+try:
+    widget.set_text($TEXT)
+finally:
+    lv.timer_enable(True)
 try:
     import udisplay
 except ImportError:
