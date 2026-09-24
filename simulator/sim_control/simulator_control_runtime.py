@@ -5,8 +5,11 @@ Hardware UI inspection is implemented by transient scripts sent over REPL.
 """
 import lvgl as lv
 
+from . import touch
+
 
 _application = None
+_pointer = None
 
 
 def bind_application(application):
@@ -81,50 +84,6 @@ def _find_path(obj, path):
     return current
 
 
-def _find_at(obj, x, y, abs_x=0, abs_y=0, path=None):
-    if path is None:
-        path = []
-
-    try:
-        if obj.has_flag(lv.obj.FLAG.HIDDEN):
-            return None, None
-    except:
-        pass
-
-    current_x = abs_x + obj.get_x()
-    current_y = abs_y + obj.get_y()
-    width = obj.get_width()
-    height = obj.get_height()
-    if not (current_x <= x <= current_x + width and current_y <= y <= current_y + height):
-        return None, None
-
-    for index in range(obj.get_child_count() - 1, -1, -1):
-        result, result_path = _find_at(
-            obj.get_child(index), x, y, current_x, current_y, path + [index]
-        )
-        if result is not None:
-            return result, result_path
-
-    return obj, path
-
-
-def _click_target(widget, path):
-    current = widget
-    current_path = path
-    while current is not None:
-        if "button" in type(current).__name__.lower():
-            return current, current_path
-        try:
-            parent = current.get_parent()
-            if parent is None or parent == current:
-                break
-            current = parent
-            current_path = current_path[:-1]
-        except:
-            break
-    return widget, path
-
-
 def _widget_summary(widget, path):
     return {
         "path": list(path),
@@ -150,25 +109,58 @@ def find(text=None, path=None, x=None, y=None, layer="screen"):
         widget = _find_path(root, path)
         widget_path = path if widget is not None else None
     else:
-        widget, widget_path = _find_at(root, x, y)
+        found = touch.describe(touch.hit(x, y))
+        if found is None:
+            return {"ok": False, "error": "Widget not found"}
+        layer = found["layer"]
+        widget_path = found["path"]
+        widget = _find_path(_root_for_layer(layer), widget_path)
 
     if widget is None:
         return {"ok": False, "error": "Widget not found"}
     return {"ok": True, "layer": layer, "widget": _widget_summary(widget, widget_path)}
 
 
+def pointer():
+    """Return the shared virtual pointer, creating it on first use."""
+    global _pointer
+    if _pointer is None:
+        _pointer = touch.VirtualPointer()
+    return _pointer
+
+
+def play(points):
+    """Start a gesture on the virtual pointer; the caller waits for busy() to clear."""
+    try:
+        duration = pointer().play(points)
+    except (TypeError, ValueError, IndexError) as error:
+        return {"ok": False, "error": str(error)}
+    return {"ok": True, "duration_ms": duration}
+
+
 def click(text=None, path=None, x=None, y=None, layer="screen"):
-    """Dispatch a click event to a widget selected by text, path, or coordinates."""
-    result = find(text=text, path=path, x=x, y=y, layer=layer)
-    if not result["ok"]:
+    """Tap a widget selected by text or path at its centre, or tap coordinates."""
+    if x is not None or y is not None:
+        if x is None or y is None or text is not None or path is not None:
+            return {"ok": False, "error": "Provide exactly one selector: text, path, or x+y"}
+        result = play(touch.tap_points(x, y))
+        if result["ok"]:
+            result["tapped"] = {"x": int(x), "y": int(y), "hit": touch.describe(touch.hit(x, y))}
         return result
 
-    root = _root_for_layer(layer)
-    widget_path = result["widget"]["path"]
-    widget = _find_path(root, widget_path)
-    target, target_path = _click_target(widget, widget_path)
-    target.send_event(lv.EVENT.CLICKED, None)
-    result["clicked"] = _widget_summary(target, target_path)
+    result = find(text=text, path=path, layer=layer)
+    if not result["ok"]:
+        return result
+    widget = _find_path(_root_for_layer(layer), result["widget"]["path"])
+    try:
+        tap_x, tap_y, found = touch.aim(widget)
+    except ValueError as error:
+        return {"ok": False, "error": str(error)}
+    played = play(touch.tap_points(tap_x, tap_y))
+    if not played["ok"]:
+        return played
+    result["duration_ms"] = played["duration_ms"]
+    result["tapped"] = {"x": tap_x, "y": tap_y, "hit": touch.describe(found)}
     return result
 
 
@@ -282,6 +274,7 @@ def capabilities():
             "tree": True,
             "find": True,
             "click": ["text", "path", "coordinates"],
+            "touch": True,
             "write_text": ["path", "textarea_index"],
             "layers": ["screen", "top"],
         },
@@ -319,6 +312,8 @@ def handle(request):
             target=request.get("target", 0),
             layer=layer,
         )
+    if action == "touch":
+        return play(request.get("points"))
     if action == "get_state":
         return get_state()
     if action == "navigate":

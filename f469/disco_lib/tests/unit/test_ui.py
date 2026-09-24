@@ -185,14 +185,16 @@ class TestGenericControl:
         assert "import lvgl as lv" in script
         assert "MockUI" not in script
 
-    def test_hardware_capabilities_do_not_advertise_coordinate_clicks(self, mock_repl):
+    def test_hardware_capabilities_advertise_touch_and_coordinate_clicks(self, mock_repl):
         mock_repl._version_then("unused")
 
         runner = CliRunner()
         result = runner.invoke(ui_control, ['{"action":"capabilities"}'])
 
         assert result.exit_code == 0
-        assert json.loads(result.output)["ui"]["click"] == ["text", "path"]
+        ui = json.loads(result.output)["ui"]
+        assert ui["click"] == ["text", "path", "coordinates"]
+        assert ui["touch"] is True
 
     def test_application_action_returns_hardware_unsupported_response(self, mock_repl):
         mock_repl._version_then("unused")
@@ -637,7 +639,7 @@ class TestScreenshotCommand:
 
 
 class TestTransientActionScripts:
-    """Transient click scripts must pause LVGL timers and surface redraw errors."""
+    """The text-entry script must pause LVGL timers and surface redraw errors."""
 
     @staticmethod
     def _install_fakes(monkeypatch, udisplay_module):
@@ -654,17 +656,18 @@ class TestTransientActionScripts:
 
     @staticmethod
     def _exec_click_path(widget):
-        from disco_lib.commands.ui import _CLICK_PATH_SCRIPT
+        from disco_lib.commands.ui import _WRITE_PATH_SCRIPT
 
         widget.get_child.return_value = widget
-        script = _CLICK_PATH_SCRIPT.replace("$ROOT", "_root").replace("$PATH", "[0]")
+        script = (_WRITE_PATH_SCRIPT.replace("$ROOT", "_root")
+                  .replace("$PATH", "[0]").replace("$TEXT", "'x'"))
         exec(script, {"_root": widget})
 
     def test_missing_udisplay_is_tolerated(self, monkeypatch, capsys):
         self._install_fakes(monkeypatch, None)
         widget = MagicMock()
         self._exec_click_path(widget)
-        widget.send_event.assert_called_once_with(7, None)
+        widget.set_text.assert_called_once_with("x")
         assert capsys.readouterr().out.strip() == "OK"
 
     def test_redraw_error_is_not_swallowed(self, monkeypatch, capsys):
@@ -685,7 +688,7 @@ class TestTransientActionScripts:
         lvgl = self._install_fakes(monkeypatch, None)
         widget = MagicMock()
         seen = []
-        widget.send_event.side_effect = lambda *_: seen.append(list(lvgl.timer_states))
+        widget.set_text.side_effect = lambda *_: seen.append(list(lvgl.timer_states))
         self._exec_click_path(widget)
         assert seen == [[False]]
         assert lvgl.timer_states == [False, True]
@@ -693,7 +696,88 @@ class TestTransientActionScripts:
     def test_timers_reenabled_when_click_handler_fails(self, monkeypatch):
         lvgl = self._install_fakes(monkeypatch, None)
         widget = MagicMock()
-        widget.send_event.side_effect = RuntimeError("handler failed")
+        widget.set_text.side_effect = RuntimeError("handler failed")
         with pytest.raises(RuntimeError, match="handler failed"):
             self._exec_click_path(widget)
         assert lvgl.timer_states == [False, True]
+
+
+class TestBoardTouch:
+    """Board touch goes through the shared virtual pointer, installed once per boot."""
+
+    @staticmethod
+    def _fake_board(mock_repl, results, tree=None):
+        state = {"installed": False, "scripts": []}
+
+        def exec_raw(dev, script, baud, timeout=10):
+            state["scripts"].append(script)
+            if "screen_active') else '8'" in script:
+                return "9"
+            if "_devtools_touch = type(" in script:
+                state["installed"] = True
+                return "OK"
+            if "_devtools_ns" in script:
+                return "OK"
+            if "_devtools_run" in script:
+                if not state["installed"]:
+                    return json.dumps({"install": True})
+                return json.dumps(results.pop(0))
+            return tree
+        mock_repl.exec_raw.side_effect = exec_raw
+        return state
+
+    def test_first_touch_installs_the_module_then_retries(self, mock_repl):
+        state = self._fake_board(mock_repl, [{"ok": True, "duration_ms": 300}])
+
+        result = CliRunner().invoke(ui_control, ['{"action":"touch","points":[[1,2,0],[3,4,300]]}'])
+
+        assert result.exit_code == 0
+        assert json.loads(result.output) == {"duration_ms": 300, "ok": True}
+        requests = [s for s in state["scripts"] if "_devtools_run" in s]
+        assert len(requests) == 2
+        assert "[[1, 2, 0], [3, 4, 300]]" in requests[-1]
+
+    def test_install_chunks_stay_small(self):
+        from disco_lib.commands.ui import _TOUCH_CHUNK_LIMIT, _touch_chunks
+
+        chunks = _touch_chunks()
+        assert "class VirtualPointer" in "".join(chunks)
+        assert '"""' not in "".join(chunks)
+        assert max(len(chunk) for chunk in chunks) < 2 * _TOUCH_CHUNK_LIMIT
+
+    @pytest.mark.parametrize("points", ["[]", "[[1,2]]", '[[1,2,"0"]]', "[[1,2,true]]", '"x"'])
+    def test_invalid_points_are_rejected_before_reaching_the_board(self, mock_repl, points):
+        state = self._fake_board(mock_repl, [])
+
+        result = CliRunner().invoke(ui_control, ['{"action":"touch","points":%s}' % points])
+
+        assert json.loads(result.output)["ok"] is False
+        assert not [s for s in state["scripts"] if "_devtools" in s]
+
+    def test_coordinate_click_taps_without_reading_the_tree(self, mock_repl):
+        state = self._fake_board(mock_repl, [{"ok": True, "duration_ms": 50}])
+        state["installed"] = True
+
+        result = CliRunner().invoke(ui_control, ['{"action":"click","x":145,"y":760}'])
+
+        assert json.loads(result.output)["ok"] is True
+        assert [s for s in state["scripts"] if "_devtools_run" in s][-1].count("tap_points(145, 760)") == 1
+        assert not [s for s in state["scripts"] if "_emit(" in s]
+
+    def test_click_by_text_aims_at_the_selected_widget(self, mock_repl):
+        tree = "\n".join([
+            '{"path": [], "type": "obj"}',
+            '{"path": [0], "type": "button"}',
+            '{"path": [0, 0], "type": "label", "text": "Start"}',
+        ])
+        state = self._fake_board(mock_repl, [{"ok": True, "duration_ms": 50,
+                                              "tapped": {"x": 60, "y": 30, "hit": {"path": [0]}}}], tree)
+        state["installed"] = True
+
+        result = CliRunner().invoke(ui_control, ['{"action":"click","text":"Start"}'])
+
+        response = json.loads(result.output)
+        assert response["ok"] is True
+        assert response["widget"]["path"] == [0]
+        aim_script = [s for s in state["scripts"] if "_devtools_run" in s][-1]
+        assert "touch.aim(widget)" in aim_script and "for index in [0]:" in aim_script

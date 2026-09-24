@@ -13,6 +13,16 @@ SIMULATOR_HOST = "127.0.0.1"
 SIMULATOR_PORT = 9876
 DEFAULT_F469_DISCO = Path(__file__).resolve().parents[2] / "f469" / "disco"
 F469_DISPLAY = {"width": 480, "height": 800}
+RESPONSE_TIMEOUT = 5.0
+
+
+def gesture_seconds(request: ControlRequest) -> float:
+    """Return how long a touch request keeps the finger down."""
+    points = request.get("points") if request.get("action") == "touch" else None
+    try:
+        return max(0.0, float(points[-1][2]) / 1000)
+    except (TypeError, ValueError, IndexError, KeyError):
+        return 0.0
 
 
 class SimulatorTarget:
@@ -22,8 +32,8 @@ class SimulatorTarget:
         self.host = host
         self.port = port
 
-    def _send(self, command: dict) -> ControlResponse:
-        with socket.create_connection((self.host, self.port), timeout=5) as connection:
+    def _send(self, command: dict, timeout: float = RESPONSE_TIMEOUT) -> ControlResponse:
+        with socket.create_connection((self.host, self.port), timeout=timeout) as connection:
             connection.sendall((json.dumps(command) + "\n").encode())
             response = b""
             while b"\n" not in response:
@@ -34,7 +44,8 @@ class SimulatorTarget:
         return json.loads(response.split(b"\n", 1)[0].decode())
 
     def request(self, request: ControlRequest) -> ControlResponse:
-        return self._send({"action": "control", "request": request})
+        return self._send({"action": "control", "request": request},
+                          RESPONSE_TIMEOUT + gesture_seconds(request))
 
     def screenshot(self, output: Path) -> ControlResponse:
         result = self._send({"action": "screenshot"})
@@ -68,7 +79,9 @@ class F469Target:
         return result.stdout.strip()
 
     def request(self, request: ControlRequest) -> ControlResponse:
-        output = self._run("ui", "control", json.dumps(request, separators=(",", ":")))
+        timeout = 10 + int(gesture_seconds(request) + 1)
+        output = self._run("ui", "control", "--timeout", str(timeout),
+                           json.dumps(request, separators=(",", ":")))
         lines = [line for line in output.splitlines() if line.strip()]
         if not lines:
             raise TargetError("disco ui control returned no response")

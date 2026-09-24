@@ -118,24 +118,71 @@ def test_tree_includes_canonical_paths_and_geometry(monkeypatch):
     assert result["root"]["width"] == screen.width
 
 
-def test_click_by_text_dispatches_to_parent_button(monkeypatch):
+class RecordingPointer:
+    def __init__(self):
+        self.gestures = []
+
+    def play(self, points):
+        self.gestures.append(points)
+        return points[-1][2]
+
+
+def _install_touch(monkeypatch, hit_widget):
+    pointer = RecordingPointer()
+    monkeypatch.setattr(control, "_pointer", pointer)
+    monkeypatch.setattr(control.touch, "hit", lambda x, y: hit_widget)
+    monkeypatch.setattr(control.touch, "describe", lambda widget: widget and {
+        "layer": "screen", "path": [0], "type": type(widget).__name__, "text": None})
+    return pointer
+
+
+def test_click_by_text_taps_the_widget_centre(monkeypatch):
     _, start_button, _ = _install_screen(monkeypatch)
+    pointer = _install_touch(monkeypatch, start_button)
+    aimed = []
+    monkeypatch.setattr(control.touch, "aim", lambda widget: aimed.append(widget) or (60, 30, start_button))
 
     result = control.click(text="Start")
 
     assert result["ok"] is True
-    assert result["widget"]["path"] == [0]
-    assert start_button.events == [("clicked", None)]
+    assert aimed == [start_button]
+    assert pointer.gestures == [[[60, 30, 0], [60, 30, 50]]]
+    assert result["duration_ms"] == 50
+    assert result["tapped"]["hit"]["type"] == "button"
+    assert start_button.events == []
 
 
-def test_click_by_coordinates_dispatches_to_deepest_clickable_parent(monkeypatch):
+def test_click_refuses_a_widget_a_finger_cannot_reach(monkeypatch):
+    _install_screen(monkeypatch)
+    pointer = _install_touch(monkeypatch, None)
+
+    def covered(widget):
+        raise ValueError("Widget is covered or off-screen at (60, 30)")
+
+    monkeypatch.setattr(control.touch, "aim", covered)
+
+    assert control.click(text="Start") == {"ok": False, "error": "Widget is covered or off-screen at (60, 30)"}
+    assert pointer.gestures == []
+
+
+def test_click_by_coordinates_taps_there(monkeypatch):
     _, start_button, _ = _install_screen(monkeypatch)
+    pointer = _install_touch(monkeypatch, start_button)
 
     result = control.click(x=16, y=16)
 
     assert result["ok"] is True
-    assert start_button.events == [("clicked", None)]
-    assert result["clicked"]["path"] == [0]
+    assert pointer.gestures == [[[16, 16, 0], [16, 16, 50]]]
+    assert result["tapped"]["hit"]["path"] == [0]
+
+
+def test_touch_request_plays_the_given_points(monkeypatch):
+    _install_screen(monkeypatch)
+    pointer = _install_touch(monkeypatch, None)
+    points = [[10, 10, 0], [90, 10, 300]]
+
+    assert control.handle({"action": "touch", "points": points}) == {"ok": True, "duration_ms": 300}
+    assert pointer.gestures == [points]
 
 
 def test_write_text_by_path_updates_textarea(monkeypatch):

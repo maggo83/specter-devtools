@@ -22,6 +22,7 @@ class ControlServer:
         self.socket.setblocking(False)
         self.client = None
         self.buf = b""
+        self.pending = None
 
         # Create LVGL timer to poll for commands
         self.timer = lv.timer_create(self._poll, 50, None)
@@ -29,6 +30,11 @@ class ControlServer:
     def _poll(self, timer):
         """Called by LVGL timer to check for commands."""
         self._check_connection()
+        if self.pending is not None:
+            if control.pointer().busy():
+                return
+            self._send_response(self.pending)
+            self.pending = None
         self._process_commands()
 
     def _check_connection(self):
@@ -56,14 +62,18 @@ class ControlServer:
 
     def _process_commands(self):
         """Process any complete commands in buffer."""
-        while b"\n" in self.buf:
+        while b"\n" in self.buf and self.pending is None:
             line, self.buf = self.buf.split(b"\n", 1)
             try:
                 cmd = json.loads(line.decode())
                 response = self._handle_command(cmd)
             except Exception as e:
                 response = {"ok": False, "error": str(e)}
-            self._send_response(response)
+            # Gestures play over later LVGL cycles; reply once the finger lifts.
+            if response.get("ok") and "duration_ms" in response:
+                self.pending = response
+            else:
+                self._send_response(response)
 
     def _send_response(self, response):
         """Send JSON response to client."""

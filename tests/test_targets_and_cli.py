@@ -50,8 +50,10 @@ def test_f469_target_sends_ui_control_through_disco(monkeypatch, tmp_path):
     )
 
     F469Target(launcher).request({"action": "capabilities"})
+    F469Target(launcher).request({"action": "touch", "points": [[1, 1, 0], [1, 1, 4500]]})
 
-    assert commands == [[str(launcher.resolve()), "ui", "control", '{"action":"capabilities"}']]
+    assert commands[0] == [str(launcher.resolve()), "ui", "control", "--timeout", "11", '{"action":"capabilities"}']
+    assert commands[1][3:5] == ["--timeout", "15"]
 
 
 def test_f469_target_rejects_a_missing_launcher(tmp_path):
@@ -134,6 +136,10 @@ class RecordingTarget:
         (["set", "is_locked", "true"], {"action": "set_state", "attr": "is_locked", "value": True}),
         (["set", "battery_pct", "42"], {"action": "set_state", "attr": "battery_pct", "value": 42}),
         (["set", "label", "Cold A"], {"action": "set_state", "attr": "label", "value": "Cold A"}),
+        (["tap", "145", "760"], {"action": "touch", "points": [[145, 760, 0], [145, 760, 50]]}),
+        (["long-press", "10", "20", "--ms", "800"], {"action": "touch", "points": [[10, 20, 0], [10, 20, 800]]}),
+        (["drag", "0", "440", "100", "440", "--ms", "100"],
+         {"action": "touch", "points": [[0, 440, 0], [25, 440, 25], [50, 440, 50], [75, 440, 75], [100, 440, 100]]}),
     ],
 )
 def test_shortcuts_send_contract_requests(monkeypatch, argv, expected):

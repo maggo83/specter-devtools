@@ -9,6 +9,8 @@ from .contract import TargetError
 from .targets import SIMULATOR_HOST, SIMULATOR_PORT, TARGETS, make_target
 
 LAYERS = ("screen", "top")
+TAP_MS = 50
+DRAG_STEP_MS = 25
 
 
 def _parse_request(value: str) -> dict:
@@ -42,6 +44,17 @@ def build_parser() -> argparse.ArgumentParser:
     click = commands.add_parser("click", help="Click the widget showing TEXT")
     click.add_argument("text")
     click.add_argument("--layer", choices=LAYERS, default="screen")
+    tap = commands.add_parser("tap", help="Tap the screen at X Y")
+    tap.add_argument("x", type=int)
+    tap.add_argument("y", type=int)
+    long_press = commands.add_parser("long-press", help="Press and hold at X Y")
+    long_press.add_argument("x", type=int)
+    long_press.add_argument("y", type=int)
+    long_press.add_argument("--ms", type=int, default=1000)
+    drag = commands.add_parser("drag", help="Press at X1 Y1, move to X2 Y2, release")
+    for name in ("x1", "y1", "x2", "y2"):
+        drag.add_argument(name, type=int)
+    drag.add_argument("--ms", type=int, default=600)
     for name, help_text in (("tree", "Print the widget tree"), ("labels", "List visible texts")):
         layer_command = commands.add_parser(name, help=help_text)
         layer_command.add_argument("--layer", choices=LAYERS, default="screen")
@@ -67,9 +80,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _drag_points(x1, y1, x2, y2, ms):
+    steps = max(1, ms // DRAG_STEP_MS)
+    return [[x1 + (x2 - x1) * i // steps, y1 + (y2 - y1) * i // steps, ms * i // steps]
+            for i in range(steps + 1)]
+
+
 def _shortcut_request(args: argparse.Namespace) -> dict:
     if args.command == "click":
         return {"action": "click", "text": args.text, "layer": args.layer}
+    if args.command == "tap":
+        return {"action": "touch", "points": [[args.x, args.y, 0], [args.x, args.y, TAP_MS]]}
+    if args.command == "long-press":
+        return {"action": "touch", "points": [[args.x, args.y, 0], [args.x, args.y, args.ms]]}
+    if args.command == "drag":
+        return {"action": "touch", "points": _drag_points(args.x1, args.y1, args.x2, args.y2, args.ms)}
     if args.command == "tree":
         return {"action": "tree", "layer": args.layer}
     if args.command == "state":

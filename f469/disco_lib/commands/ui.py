@@ -1,9 +1,12 @@
 """LVGL remote-control commands."""
 
+import ast
+import hashlib
 import json as json_mod
 import os
 import struct
 import tempfile
+from pathlib import Path
 
 import click
 
@@ -222,25 +225,89 @@ def _emit(obj, path):
 _emit($ROOT, [])
 """
 
-_CLICK_PATH_SCRIPT = """\
-import lvgl as lv
-root = $ROOT
-widget = root
-for index in $PATH:
-    widget = widget.get_child(index)
-lv.timer_enable(False)
-try:
-    widget.send_event(lv.EVENT.CLICKED, None)
-finally:
-    lv.timer_enable(True)
-try:
-    import udisplay
-except ImportError:
-    pass
-else:
-    for _ in range(12):
-        udisplay.update(30)
+# Shared with the simulator: one device-side touch implementation.
+_TOUCH_SOURCE = (
+    Path(__file__).resolve().parents[3] / "simulator" / "sim_control" / "touch.py"
+).read_text()
+
+# Installs the touch module once per boot, in chunks small enough for a
+# fragmented board heap; requests then only send their short body.
+_TOUCH_INSTALL_START = """\
+import gc
+if globals().get('_devtools_touch') is not None:
+    _devtools_touch.pointer.indev.delete()
+_devtools_touch = None
+_devtools_touch_src = None
+_devtools_ns = {}
+gc.collect()
 print('OK')
+"""
+
+_TOUCH_INSTALL_CHUNK = "exec($CHUNK, _devtools_ns)\nprint('OK')\n"
+
+_TOUCH_INSTALL_FINISH = """\
+_devtools_touch = type('touch', (), _devtools_ns)
+del _devtools_ns
+_devtools_touch.pointer = _devtools_touch.VirtualPointer()
+_devtools_touch_src = $SOURCE_HASH
+import gc
+gc.collect()
+print('OK')
+"""
+
+_TOUCH_CHUNK_LIMIT = 1200
+
+# Runs $BODY with `touch` bound, prints one JSON line, then waits for the finger to lift.
+_TOUCH_SCRIPT = """\
+import json, utime
+import lvgl as lv
+_devtools_ready = globals().get('_devtools_touch_src') == $SOURCE_HASH
+def _devtools_run(touch):
+$BODY
+if not _devtools_ready:
+    print(json.dumps({'install': True}))
+else:
+    _devtools_result = _devtools_run(_devtools_touch)
+    while _devtools_result.get('ok') and _devtools_touch.pointer.busy():
+        utime.sleep_ms(10)
+    print(json.dumps(_devtools_result))
+"""
+
+_TOUCH_POINTS_BODY = """\
+    try:
+        return {'ok': True, 'duration_ms': touch.pointer.play($POINTS)}
+    except (TypeError, ValueError, IndexError) as error:
+        return {'ok': False, 'error': str(error)}
+"""
+
+_TOUCH_AIM_BODY = """\
+    widget = $ROOT
+    for index in $PATH:
+        widget = widget.get_child(index)
+    try:
+        x, y, found = touch.aim(widget)
+        duration = touch.pointer.play(touch.tap_points(x, y))
+    except ValueError as error:
+        return {'ok': False, 'error': str(error)}
+    return {'ok': True, 'duration_ms': duration,
+            'tapped': {'x': x, 'y': y, 'hit': touch.describe(found)}}
+"""
+
+_TOUCH_TAP_BODY = """\
+    try:
+        duration = touch.pointer.play(touch.tap_points($X, $Y))
+    except ValueError as error:
+        return {'ok': False, 'error': str(error)}
+    return {'ok': True, 'duration_ms': duration,
+            'tapped': {'x': $X, 'y': $Y, 'hit': touch.describe(touch.hit($X, $Y))}}
+"""
+
+_TOUCH_FIND_BODY = """\
+    found = touch.describe(touch.hit($X, $Y))
+    if found is None:
+        return {'ok': False, 'error': 'Widget not found'}
+    layer = found.pop('layer')
+    return {'ok': True, 'layer': layer, 'widget': found}
 """
 
 _WRITE_PATH_SCRIPT = """\
@@ -336,20 +403,79 @@ def _select_widget(root, request):
     elif path is not None:
         widget = _node_at_path(root, path)
     else:
-        return None, "Coordinate selection is unavailable on hardware"
+        return None, "Coordinate selection resolves on the device"
     if widget is None:
         return None, "Widget not found"
     return widget, None
 
 
-def _click_target(root, widget):
-    path = widget["path"]
-    while path:
-        candidate = _node_at_path(root, path)
-        if "button" in candidate["type"].lower():
-            return candidate
-        path = path[:-1]
-    return widget
+def _is_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _points(value):
+    """Validate touch points: a non-empty list of [x, y, ms] integers."""
+    if not isinstance(value, list) or not value:
+        return None
+    points = []
+    for point in value:
+        if not isinstance(point, list) or len(point) != 3 or not all(_is_int(v) for v in point):
+            return None
+        points.append(list(point))
+    return points
+
+
+def _touch_chunks():
+    """Split touch.py into small top-level chunks without docstrings or comments."""
+    tree = ast.parse(_TOUCH_SOURCE)
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if (isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef)) and body
+                and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            node.body = body[1:] or [ast.Pass()]
+    chunks, current = [], ""
+    for node in tree.body:
+        code = ast.unparse(node) + "\n"
+        if current and len(current) + len(code) > _TOUCH_CHUNK_LIMIT:
+            chunks.append(current)
+            current = ""
+        current += code
+    return chunks + [current] if current else chunks
+
+
+def _install_touch(dev, baud, timeout, source_hash):
+    scripts = [_TOUCH_INSTALL_START]
+    scripts += [_TOUCH_INSTALL_CHUNK.replace("$CHUNK", repr(chunk)) for chunk in _touch_chunks()]
+    scripts.append(_TOUCH_INSTALL_FINISH.replace("$SOURCE_HASH", repr(source_hash)))
+    for script in scripts:
+        _run_path_script(dev, script, baud, timeout, "Touch install")
+
+
+def _touch_request(dev, body, baud, timeout, **values):
+    """Run a touch body on the device and return its JSON result."""
+    source_hash = hashlib.sha256(_TOUCH_SOURCE.encode()).hexdigest()[:16]
+    script = (
+        _TOUCH_SCRIPT
+        .replace("$SOURCE_HASH", repr(source_hash))
+        .replace("$BODY", body)
+    )
+    for key, value in values.items():
+        script = script.replace("$" + key, value)
+    for attempt in range(2):
+        try:
+            output = repl_backend.exec_raw(dev, script, baud, timeout)
+        except RuntimeError as error:
+            raise click.ClickException(str(error))
+        lines = [line for line in output.splitlines() if line.strip()]
+        try:
+            result = json_mod.loads(lines[-1])
+        except (IndexError, json_mod.JSONDecodeError) as error:
+            raise click.ClickException(f"Touch request failed: {output.strip()}") from error
+        if result != {"install": True} or attempt:
+            return result
+        _install_touch(dev, baud, timeout, source_hash)
+    return result
 
 
 def _textareas(node, result):
@@ -388,7 +514,8 @@ def _generic_control_request(dev, request, baud, timeout):
             "ok": True,
             "ui": {
                 "tree": True, "find": True,
-                "click": ["text", "path"],
+                "click": ["text", "path", "coordinates"],
+                "touch": True,
                 "write_text": ["path", "textarea_index"],
                 "layers": ["screen", "top"],
             },
@@ -396,6 +523,17 @@ def _generic_control_request(dev, request, baud, timeout):
         }
     if action in ("get_state", "navigate", "set_state"):
         return {"ok": False, "error": "Unsupported action on hardware: " + action}
+    if action == "touch":
+        points = _points(request.get("points"))
+        if points is None:
+            return {"ok": False, "error": "points must be a non-empty list of [x, y, ms] integers"}
+        return _touch_request(dev, _TOUCH_POINTS_BODY, baud, timeout, POINTS=repr(points))
+    x, y = request.get("x"), request.get("y")
+    if action in ("find", "click") and (x is not None or y is not None):
+        if not (_is_int(x) and _is_int(y)) or request.get("text") is not None or request.get("path") is not None:
+            return {"ok": False, "error": "Provide exactly one selector: text, path, or integer x+y"}
+        body = _TOUCH_TAP_BODY if action == "click" else _TOUCH_FIND_BODY
+        return _touch_request(dev, body, baud, timeout, X=str(x), Y=str(y))
 
     layer = request.get("layer", "screen")
     if layer not in ("screen", "top"):
@@ -414,18 +552,13 @@ def _generic_control_request(dev, request, baud, timeout):
         widget, error = _select_widget(root, request)
         if error:
             return {"ok": False, "error": error}
-        target = _click_target(root, widget)
-        script = (
-            _CLICK_PATH_SCRIPT
-            .replace("$ROOT", _root_expr(layer))
-            .replace("$PATH", repr(target["path"]))
+        result = _touch_request(
+            dev, _TOUCH_AIM_BODY, baud, timeout,
+            ROOT=_root_expr(layer), PATH=repr(widget["path"]),
         )
-        _run_path_script(dev, script, baud, timeout, "UI click")
-        return {
-            "ok": True, "layer": layer,
-            "widget": _widget_summary(widget),
-            "clicked": _widget_summary(target),
-        }
+        if result.get("ok"):
+            result.update({"layer": layer, "widget": _widget_summary(widget)})
+        return result
     if action == "write_text":
         path = request.get("path")
         if path is not None:
