@@ -58,15 +58,15 @@ def build_parser() -> argparse.ArgumentParser:
     for name, help_text in (("tree", "Print the widget tree"), ("labels", "List visible texts")):
         layer_command = commands.add_parser(name, help=help_text)
         layer_command.add_argument("--layer", choices=LAYERS, default="screen")
-    commands.add_parser("state", help="Show application state (simulator only)")
-    goto = commands.add_parser("goto", help="Open a menu by id (simulator only)")
+    commands.add_parser("state", help="Show MockUI application state")
+    goto = commands.add_parser("goto", help="Open a MockUI menu by id")
     goto.add_argument("menu_id")
-    commands.add_parser("back", help="Go back one menu (simulator only)")
-    set_state = commands.add_parser("set", help="Set a device state attribute (simulator only)")
+    commands.add_parser("back", help="Go back one MockUI menu")
+    set_state = commands.add_parser("set", help="Set a MockUI device state attribute")
     set_state.add_argument("attr")
     set_state.add_argument("value", type=_parse_value, help="JSON value such as true or 3; other text is a string")
     explore_parser = commands.add_parser(
-        "explore", help="Click through all menus and capture each screen (simulator only)"
+        "explore", help="Click through all MockUI menus and capture each screen"
     )
     explore_parser.add_argument("folder")
     explore_parser.add_argument("--max-depth", type=int, default=5)

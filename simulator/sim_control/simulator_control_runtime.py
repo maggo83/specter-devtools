@@ -1,11 +1,11 @@
 """Simulator-only MockUI control primitives.
 
 This module is frozen into the Unix simulator, never into STM32 firmware.
-Hardware UI inspection is implemented by transient scripts sent over REPL.
+Boards run the shared touch and app_control modules through REPL scripts.
 """
 import lvgl as lv
 
-from . import touch
+from . import app_control, touch
 
 
 _application = None
@@ -197,73 +197,24 @@ def write_text(text, path=None, target=0, layer="screen"):
 
 
 def get_state():
-    """Return simulator MockUI application state."""
+    """Return MockUI application state."""
     if _application is None:
         return {"ok": False, "error": "Application control is unavailable"}
-
-    device_state = _application.device_state
-    ui_state = _application.ui_state
-    active_wallet = getattr(device_state, "active_wallet", None)
-    if active_wallet is None:
-        active_wallet = getattr(ui_state, "active_wallet", None)
-
-    def wallet_info(wallet):
-        return {
-            "name": getattr(wallet, "label", getattr(wallet, "name", None)),
-            "descriptor": getattr(wallet, "descriptor", getattr(wallet, "xpub", None)),
-            "isMultiSig": getattr(wallet, "isMultiSig", False),
-            "net": getattr(wallet, "net", "mainnet"),
-        }
-
-    return {
-        "ok": True,
-        "specter": {
-            "seed_loaded": bool(getattr(device_state, "loaded_seeds", [])),
-            "loaded_seed_count": len(getattr(device_state, "loaded_seeds", [])),
-            "is_locked": getattr(device_state, "is_locked", False),
-            "pin": getattr(device_state, "pin", None),
-            "active_wallet": wallet_info(active_wallet) if active_wallet else None,
-            "registered_wallets": [wallet_info(wallet) for wallet in getattr(device_state, "registered_wallets", [])],
-            "hasUSB": device_state.hasUSB() if callable(getattr(device_state, "hasUSB", None)) else getattr(device_state, "hasUSB", False),
-            "enabledUSB": device_state.USB_enabled() if callable(getattr(device_state, "USB_enabled", None)) else getattr(device_state, "enabledUSB", False),
-            "hasQR": device_state.hasQR() if callable(getattr(device_state, "hasQR", None)) else getattr(device_state, "hasQR", False),
-            "enabledQR": device_state.QR_enabled() if callable(getattr(device_state, "QR_enabled", None)) else getattr(device_state, "enabledQR", False),
-            "hasSD": device_state.hasSD() if callable(getattr(device_state, "hasSD", None)) else getattr(device_state, "hasSD", False),
-            "enabledSD": device_state.SD_enabled() if callable(getattr(device_state, "SD_enabled", None)) else getattr(device_state, "enabledSD", False),
-            "detectedSD": device_state.SD_detected() if callable(getattr(device_state, "SD_detected", None)) else getattr(device_state, "detectedSD", False),
-            "hasSmartCard": device_state.hasSmartCard() if callable(getattr(device_state, "hasSmartCard", None)) else getattr(device_state, "hasSmartCard", False),
-            "enabledSmartCard": device_state.SmartCard_enabled() if callable(getattr(device_state, "SmartCard_enabled", None)) else getattr(device_state, "enabledSmartCard", False),
-            "detectedSmartCard": device_state.SmartCard_detected() if callable(getattr(device_state, "SmartCard_detected", None)) else getattr(device_state, "detectedSmartCard", False),
-        },
-        "ui": {
-            "current_menu_id": ui_state.current_menu_id,
-            "history": [snapshot.menu_id if hasattr(snapshot, "menu_id") else snapshot for snapshot in getattr(ui_state, "history", [])],
-            "modal": getattr(ui_state, "modal", None),
-        },
-    }
+    return app_control.get_state(_application)
 
 
 def navigate(target="back"):
-    """Navigate the simulator MockUI application by menu id or back."""
+    """Open a MockUI menu by id, or go back."""
     if _application is None:
         return {"ok": False, "error": "Application control is unavailable"}
-    _application.navigate_to(None if target in (None, "back") else target)
-    result = get_state()
-    result["navigated"] = "back" if target in (None, "back") else target
-    return result
+    return app_control.navigate(_application, target)
 
 
 def set_state(attr, value):
-    """Set a public simulator DeviceState attribute and rebuild the visible screen."""
+    """Set a public MockUI DeviceState attribute and rebuild the visible screen."""
     if _application is None:
         return {"ok": False, "error": "Application control is unavailable"}
-    if not attr or attr.startswith("_") or not hasattr(_application.device_state, attr):
-        return {"ok": False, "error": "Unknown or private state attribute: " + str(attr)}
-
-    setattr(_application.device_state, attr, value)
-    _application.rebuild_slot("app_screen")
-    _application.refresh_ui()
-    return {"ok": True, "set": {attr: value}}
+    return app_control.set_state(_application, attr, value)
 
 
 def capabilities():

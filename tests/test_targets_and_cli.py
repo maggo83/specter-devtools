@@ -198,9 +198,9 @@ def test_explore_captures_every_reachable_menu(monkeypatch, capsys, tmp_path):
 def test_explore_fails_visibly_without_application_state(monkeypatch, capsys, tmp_path):
     class NoAppTarget:
         def request(self, request):
-            return {"ok": False, "error": "get_state is unavailable on hardware"}
+            return {"ok": False, "error": "Application control is unavailable: no MockUI object in the REPL"}
 
     monkeypatch.setattr(cli, "make_target", lambda *args, **kwargs: NoAppTarget())
 
     assert cli.main(["--target", "f469", "explore", str(tmp_path)]) == 1
-    assert json.loads(capsys.readouterr().out)["error"] == "get_state is unavailable on hardware"
+    assert json.loads(capsys.readouterr().out)["error"] == "Application control is unavailable: no MockUI object in the REPL"

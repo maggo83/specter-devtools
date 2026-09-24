@@ -196,17 +196,12 @@ class TestGenericControl:
         assert ui["click"] == ["text", "path", "coordinates"]
         assert ui["touch"] is True
 
-    def test_application_action_returns_hardware_unsupported_response(self, mock_repl):
-        mock_repl._version_then("unused")
+    def test_capabilities_report_whether_mockui_is_running(self, mock_repl):
+        mock_repl._version_then("True")
 
-        runner = CliRunner()
-        result = runner.invoke(ui_control, ['{"action":"get_state"}'])
+        result = CliRunner().invoke(ui_control, ['{"action":"capabilities"}'])
 
-        assert result.exit_code == 0
-        assert json.loads(result.output) == {
-            "ok": False,
-            "error": "Unsupported action on hardware: get_state",
-        }
+        assert json.loads(result.output)["application"] is True
 
     def test_rejects_invalid_request_json(self):
         runner = CliRunner()
@@ -713,10 +708,10 @@ class TestBoardTouch:
             state["scripts"].append(script)
             if "screen_active') else '8'" in script:
                 return "9"
-            if "_devtools_touch = type(" in script:
-                state["installed"] = True
+            if "_devtools_src = " in script and "_devtools_ready" not in script:
+                state["installed"] = state["installed"] or "VirtualPointer()" in script
                 return "OK"
-            if "_devtools_ns" in script:
+            if "_devtools_" in script and "_devtools_run" not in script:
                 return "OK"
             if "_devtools_run" in script:
                 if not state["installed"]:
@@ -738,12 +733,14 @@ class TestBoardTouch:
         assert "[[1, 2, 0], [3, 4, 300]]" in requests[-1]
 
     def test_install_chunks_stay_small(self):
-        from disco_lib.commands.ui import _TOUCH_CHUNK_LIMIT, _touch_chunks
+        from disco_lib.commands.ui import _DEVICE_CHUNK_LIMIT, _DEVICE_SOURCES, _device_chunks
 
-        chunks = _touch_chunks()
-        assert "class VirtualPointer" in "".join(chunks)
-        assert '"""' not in "".join(chunks)
-        assert max(len(chunk) for chunk in chunks) < 2 * _TOUCH_CHUNK_LIMIT
+        for name, source in _DEVICE_SOURCES.items():
+            chunks = _device_chunks(source)
+            assert '"""' not in "".join(chunks), name
+            assert max(len(chunk) for chunk in chunks) < 2 * _DEVICE_CHUNK_LIMIT, name
+        assert "class VirtualPointer" in "".join(_device_chunks(_DEVICE_SOURCES["touch"]))
+        assert "def navigate" in "".join(_device_chunks(_DEVICE_SOURCES["app_control"]))
 
     @pytest.mark.parametrize("points", ["[]", "[[1,2]]", '[[1,2,"0"]]', "[[1,2,true]]", '"x"'])
     def test_invalid_points_are_rejected_before_reaching_the_board(self, mock_repl, points):
@@ -781,3 +778,55 @@ class TestBoardTouch:
         assert response["widget"]["path"] == [0]
         aim_script = [s for s in state["scripts"] if "_devtools_run" in s][-1]
         assert "touch.aim(widget)" in aim_script and "for index in [0]:" in aim_script
+
+
+class TestBoardApplicationControl:
+    """get_state, navigate, and set_state run the shared app_control module on the board."""
+
+    @staticmethod
+    def _requests(mock_repl, result):
+        scripts = []
+
+        def exec_raw(dev, script, baud, timeout=10):
+            scripts.append(script)
+            if "screen_active') else '8'" in script:
+                return "9"
+            return json.dumps(result)
+        mock_repl.exec_raw.side_effect = exec_raw
+        return scripts
+
+    @pytest.mark.parametrize("request_json, call", [
+        ('{"action":"get_state"}', "app_control.get_state(app)"),
+        ('{"action":"navigate","target":"manage_device"}', "app_control.navigate(app, 'manage_device')"),
+        ('{"action":"navigate","target":"back"}', "app_control.navigate(app, 'back')"),
+        ('{"action":"set_state","attr":"is_locked","value":false}',
+         "app_control.set_state(app, 'is_locked', False)"),
+    ])
+    def test_actions_call_the_shared_module_with_the_mockui_object(self, mock_repl, request_json, call):
+        scripts = self._requests(mock_repl, {"ok": True})
+
+        result = CliRunner().invoke(ui_control, [request_json])
+
+        assert json.loads(result.output) == {"ok": True}
+        assert call in scripts[-1]
+        assert "globals().get('scr')" in scripts[-1]
+
+    @pytest.mark.parametrize("request_json", [
+        '{"action":"set_state","attr":"_hidden","value":1}',
+        '{"action":"set_state","attr":"x; import os","value":1}',
+        '{"action":"navigate","target":3}',
+    ])
+    def test_invalid_requests_never_reach_the_board(self, mock_repl, request_json):
+        scripts = self._requests(mock_repl, {"ok": True})
+
+        result = CliRunner().invoke(ui_control, [request_json])
+
+        assert json.loads(result.output)["ok"] is False
+        assert not [s for s in scripts if "_devtools_run" in s]
+
+    def test_values_are_inserted_as_literals_and_not_rescanned(self, mock_repl):
+        scripts = self._requests(mock_repl, {"ok": True})
+
+        CliRunner().invoke(ui_control, ['{"action":"navigate","target":"$SOURCE_HASH"}'])
+
+        assert "app_control.navigate(app, '$SOURCE_HASH')" in scripts[-1]

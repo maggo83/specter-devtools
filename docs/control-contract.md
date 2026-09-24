@@ -25,9 +25,9 @@ specter-devtools --target f469 capture /tmp/board-capture
 | `click` | `text`, `path`, or `x` + `y`; optional `layer` | A 50 ms tap through the virtual pointer (see below); `tapped` reports the point and the widget LVGL hit. |
 | `touch` | `points`: `[[x, y, ms], ...]` | Presses at the first point, follows the points, releases after the last; returns `duration_ms` once released. |
 | `write_text` | `text`, plus `path` or textarea index `target`; optional `layer` | Updated textarea summary. |
-| `get_state` | none | Simulator only: application device and navigation state. |
-| `navigate` | menu `target` or `back` | Simulator only: updated application state. |
-| `set_state` | public `attr`, JSON `value` | Simulator only: state update and redraw. |
+| `get_state` | none | MockUI device and navigation state. |
+| `navigate` | menu `target` or `back` | Updated MockUI state. |
+| `set_state` | public `attr`, JSON `value` | State update and redraw. |
 
 Tree paths are zero-based integer arrays such as `[0, 1, 2]`, valid only for the current snapshot; navigation, animation, or rebuilds can change them. Prefer unique text; use paths for icon-only controls.
 
@@ -39,12 +39,12 @@ Clicks and gestures use a virtual LVGL pointer next to the real touchscreen or m
 - `click` by `x` + `y` taps there unconditionally.
 - `touch` replays timed samples, for example a drag: `[[209, 440, 0], [300, 440, 300], [430, 440, 600]]`. Each sample is reported at least once, so short taps are never lost. Times must not decrease, and only one gesture runs at a time.
 
-The device-side code is `simulator/sim_control/touch.py`. The simulator freezes it; the F469 receives it over the REPL once per boot, in small chunks.
+The device-side code is `simulator/sim_control/touch.py`. The simulator freezes it; the F469 receives it, together with `app_control.py`, over the REPL once per boot, in small chunks.
 
 Target differences, discoverable through `capabilities`:
 
 - Both targets support text, path, and coordinate selectors, and `touch`.
-- Only the simulator supports application actions; on the F469 they return an explicit unsupported-action error.
+- Application actions (`get_state`, `navigate`, `set_state`) need MockUI: both targets run the shared `simulator/sim_control/app_control.py` against its `SpecterGui`. On the F469 that is the `scr` object MockUI's `main.py` leaves in the REPL; `capabilities` reports `application: false` without it. Navigation and state changes run with LVGL timers paused, because on the board they run outside LVGL's update.
 
 ## Transports
 

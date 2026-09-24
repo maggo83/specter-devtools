@@ -4,6 +4,7 @@ import ast
 import hashlib
 import json as json_mod
 import os
+import re
 import struct
 import tempfile
 from pathlib import Path
@@ -225,52 +226,69 @@ def _emit(obj, path):
 _emit($ROOT, [])
 """
 
-# Shared with the simulator: one device-side touch implementation.
-_TOUCH_SOURCE = (
-    Path(__file__).resolve().parents[3] / "simulator" / "sim_control" / "touch.py"
-).read_text()
+# Device-side modules shared with the simulator, installed once per boot.
+_DEVICE_DIR = Path(__file__).resolve().parents[3] / "simulator" / "sim_control"
+_DEVICE_MODULES = ("touch", "app_control")
+_DEVICE_SOURCES = {name: (_DEVICE_DIR / (name + ".py")).read_text() for name in _DEVICE_MODULES}
+_DEVICE_HASH = hashlib.sha256(
+    "".join(_DEVICE_SOURCES[name] for name in _DEVICE_MODULES).encode()
+).hexdigest()[:16]
 
-# Installs the touch module once per boot, in chunks small enough for a
-# fragmented board heap; requests then only send their short body.
-_TOUCH_INSTALL_START = """\
+# MockUI's main.py keeps its SpecterGui in this REPL global.
+_APP_GLOBAL = "scr"
+
+# Installs in chunks small enough for a fragmented board heap; requests then
+# only send their short body.
+_DEVICE_INSTALL_START = """\
 import gc
 if globals().get('_devtools_touch') is not None:
     _devtools_touch.pointer.indev.delete()
 _devtools_touch = None
-_devtools_touch_src = None
-_devtools_ns = {}
+_devtools_app_control = None
+_devtools_src = None
 gc.collect()
 print('OK')
 """
 
-_TOUCH_INSTALL_CHUNK = "exec($CHUNK, _devtools_ns)\nprint('OK')\n"
+_DEVICE_INSTALL_CHUNK = "exec($CHUNK, _devtools_ns)\nprint('OK')\n"
 
-_TOUCH_INSTALL_FINISH = """\
-_devtools_touch = type('touch', (), _devtools_ns)
+_DEVICE_INSTALL_MODULE = """\
+_devtools_$NAME = type('$NAME', (), _devtools_ns)
 del _devtools_ns
-_devtools_touch.pointer = _devtools_touch.VirtualPointer()
-_devtools_touch_src = $SOURCE_HASH
 import gc
 gc.collect()
 print('OK')
 """
 
-_TOUCH_CHUNK_LIMIT = 1200
+_DEVICE_INSTALL_FINISH = """\
+_devtools_touch.pointer = _devtools_touch.VirtualPointer()
+_devtools_src = $SOURCE_HASH
+print('OK')
+"""
 
-# Runs $BODY with `touch` bound, prints one JSON line, then waits for the finger to lift.
-_TOUCH_SCRIPT = """\
+_DEVICE_CHUNK_LIMIT = 1200
+
+# Runs $BODY with the shared modules bound, prints one JSON line, then waits
+# for the virtual finger to lift.
+_DEVICE_SCRIPT = """\
 import json, utime
 import lvgl as lv
-_devtools_ready = globals().get('_devtools_touch_src') == $SOURCE_HASH
-def _devtools_run(touch):
+_devtools_ready = globals().get('_devtools_src') == $SOURCE_HASH
+def _devtools_run(touch, app_control, app):
 $BODY
 if not _devtools_ready:
     print(json.dumps({'install': True}))
 else:
-    _devtools_result = _devtools_run(_devtools_touch)
+    _devtools_result = _devtools_run(_devtools_touch, _devtools_app_control, globals().get($APP_GLOBAL))
     while _devtools_result.get('ok') and _devtools_touch.pointer.busy():
         utime.sleep_ms(10)
     print(json.dumps(_devtools_result))
+"""
+
+_APP_BODY = """\
+    if app is None:
+        return {'ok': False, 'error': 'Application control is unavailable: no MockUI object in the REPL'}
+    return $CALL
 """
 
 _TOUCH_POINTS_BODY = """\
@@ -425,9 +443,14 @@ def _points(value):
     return points
 
 
-def _touch_chunks():
-    """Split touch.py into small top-level chunks without docstrings or comments."""
-    tree = ast.parse(_TOUCH_SOURCE)
+def _fill(template, **values):
+    """Replace $NAME placeholders in one pass, so inserted values are never rescanned."""
+    return re.sub(r"\$([A-Z_]+)", lambda m: values.get(m.group(1), m.group(0)), template)
+
+
+def _device_chunks(source):
+    """Split a device module into small top-level chunks without docstrings."""
+    tree = ast.parse(source)
     for node in ast.walk(tree):
         body = getattr(node, "body", None)
         if (isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef)) and body
@@ -437,31 +460,29 @@ def _touch_chunks():
     chunks, current = [], ""
     for node in tree.body:
         code = ast.unparse(node) + "\n"
-        if current and len(current) + len(code) > _TOUCH_CHUNK_LIMIT:
+        if current and len(current) + len(code) > _DEVICE_CHUNK_LIMIT:
             chunks.append(current)
             current = ""
         current += code
     return chunks + [current] if current else chunks
 
 
-def _install_touch(dev, baud, timeout, source_hash):
-    scripts = [_TOUCH_INSTALL_START]
-    scripts += [_TOUCH_INSTALL_CHUNK.replace("$CHUNK", repr(chunk)) for chunk in _touch_chunks()]
-    scripts.append(_TOUCH_INSTALL_FINISH.replace("$SOURCE_HASH", repr(source_hash)))
+def _install_device_modules(dev, baud, timeout):
+    scripts = [_DEVICE_INSTALL_START]
+    for name in _DEVICE_MODULES:
+        scripts.append("_devtools_ns = {}\nprint('OK')\n")
+        scripts += [_fill(_DEVICE_INSTALL_CHUNK, CHUNK=repr(chunk))
+                    for chunk in _device_chunks(_DEVICE_SOURCES[name])]
+        scripts.append(_fill(_DEVICE_INSTALL_MODULE, NAME=name))
+    scripts.append(_fill(_DEVICE_INSTALL_FINISH, SOURCE_HASH=repr(_DEVICE_HASH)))
     for script in scripts:
-        _run_path_script(dev, script, baud, timeout, "Touch install")
+        _run_path_script(dev, script, baud, timeout, "Device module install")
 
 
-def _touch_request(dev, body, baud, timeout, **values):
-    """Run a touch body on the device and return its JSON result."""
-    source_hash = hashlib.sha256(_TOUCH_SOURCE.encode()).hexdigest()[:16]
-    script = (
-        _TOUCH_SCRIPT
-        .replace("$SOURCE_HASH", repr(source_hash))
-        .replace("$BODY", body)
-    )
-    for key, value in values.items():
-        script = script.replace("$" + key, value)
+def _device_request(dev, body, baud, timeout, **values):
+    """Run a body with the shared device modules and return its JSON result."""
+    script = _fill(_DEVICE_SCRIPT, SOURCE_HASH=repr(_DEVICE_HASH),
+                   APP_GLOBAL=repr(_APP_GLOBAL), BODY=_fill(body, **values))
     for attempt in range(2):
         try:
             output = repl_backend.exec_raw(dev, script, baud, timeout)
@@ -471,10 +492,10 @@ def _touch_request(dev, body, baud, timeout, **values):
         try:
             result = json_mod.loads(lines[-1])
         except (IndexError, json_mod.JSONDecodeError) as error:
-            raise click.ClickException(f"Touch request failed: {output.strip()}") from error
+            raise click.ClickException(f"Device request failed: {output.strip()}") from error
         if result != {"install": True} or attempt:
             return result
-        _install_touch(dev, baud, timeout, source_hash)
+        _install_device_modules(dev, baud, timeout)
     return result
 
 
@@ -495,6 +516,14 @@ def _tree_request(dev, layer, baud, timeout):
     except RuntimeError as error:
         raise click.ClickException(str(error))
     return _parse_streamed_tree(output, layer)
+
+
+def _has_application(dev, baud, timeout):
+    try:
+        output = repl_backend.exec_raw(dev, "print(%r in globals())" % _APP_GLOBAL, baud, timeout)
+    except RuntimeError as error:
+        raise click.ClickException(str(error))
+    return output.strip().splitlines()[-1:] == ["True"]
 
 
 def _run_path_script(dev, script, baud, timeout, action):
@@ -519,21 +548,33 @@ def _generic_control_request(dev, request, baud, timeout):
                 "write_text": ["path", "textarea_index"],
                 "layers": ["screen", "top"],
             },
-            "application": False,
+            "application": _has_application(dev, baud, timeout),
         }
-    if action in ("get_state", "navigate", "set_state"):
-        return {"ok": False, "error": "Unsupported action on hardware: " + action}
+    if action == "get_state":
+        return _device_request(dev, _APP_BODY, baud, timeout, CALL="app_control.get_state(app)")
+    if action == "navigate":
+        target = request.get("target", "back")
+        if target is not None and not isinstance(target, str):
+            return {"ok": False, "error": "navigate target must be a menu id or 'back'"}
+        return _device_request(dev, _APP_BODY, baud, timeout,
+                               CALL="app_control.navigate(app, %r)" % target)
+    if action == "set_state":
+        attr, value = request.get("attr"), request.get("value")
+        if not isinstance(attr, str) or not attr.isidentifier() or attr.startswith("_"):
+            return {"ok": False, "error": "Unknown or private state attribute: " + str(attr)}
+        return _device_request(dev, _APP_BODY, baud, timeout,
+                               CALL="app_control.set_state(app, %r, %r)" % (attr, value))
     if action == "touch":
         points = _points(request.get("points"))
         if points is None:
             return {"ok": False, "error": "points must be a non-empty list of [x, y, ms] integers"}
-        return _touch_request(dev, _TOUCH_POINTS_BODY, baud, timeout, POINTS=repr(points))
+        return _device_request(dev, _TOUCH_POINTS_BODY, baud, timeout, POINTS=repr(points))
     x, y = request.get("x"), request.get("y")
     if action in ("find", "click") and (x is not None or y is not None):
         if not (_is_int(x) and _is_int(y)) or request.get("text") is not None or request.get("path") is not None:
             return {"ok": False, "error": "Provide exactly one selector: text, path, or integer x+y"}
         body = _TOUCH_TAP_BODY if action == "click" else _TOUCH_FIND_BODY
-        return _touch_request(dev, body, baud, timeout, X=str(x), Y=str(y))
+        return _device_request(dev, body, baud, timeout, X=str(x), Y=str(y))
 
     layer = request.get("layer", "screen")
     if layer not in ("screen", "top"):
@@ -552,7 +593,7 @@ def _generic_control_request(dev, request, baud, timeout):
         widget, error = _select_widget(root, request)
         if error:
             return {"ok": False, "error": error}
-        result = _touch_request(
+        result = _device_request(
             dev, _TOUCH_AIM_BODY, baud, timeout,
             ROOT=_root_expr(layer), PATH=repr(widget["path"]),
         )
