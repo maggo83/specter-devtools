@@ -1,9 +1,12 @@
 """Target-independent artifact capture."""
 
 import json
+import time
 from pathlib import Path
 
-from .contract import ControlResponse, ControlTarget
+from .contract import ControlResponse, ControlTarget, TargetError
+
+_EXPLORE_SKIP = ("eng", "OK", "Cancel", "Back")
 
 
 def visible_labels(node: dict) -> list[str]:
@@ -47,3 +50,43 @@ def capture(target: ControlTarget, folder: Path) -> ControlResponse:
         },
         "label_count": len(labels),
     }
+
+
+def explore(target: ControlTarget, folder: Path, max_depth: int = 5, settle: float = 1.0) -> ControlResponse:
+    """Click through every menu reachable from main and capture each screen."""
+    folder = Path(folder)
+    visited = []
+
+    def call(request):
+        result = target.request(request)
+        if not result.get("ok"):
+            raise TargetError(result.get("error", request["action"] + " failed"))
+        return result
+
+    def current_menu():
+        return call({"action": "get_state"})["ui"]["current_menu_id"]
+
+    def visit(depth):
+        menu_id = current_menu()
+        if depth > max_depth or menu_id in visited:
+            return
+        visited.append(menu_id)
+        time.sleep(settle)
+        result = capture(target, folder / menu_id)
+        if not result.get("ok"):
+            raise TargetError(result.get("error", "capture failed"))
+        tree = json.loads(Path(result["files"]["tree"]).read_text())
+        for text in visible_labels(tree["root"]):
+            if len(text) <= 2 or text.isdigit() or text in _EXPLORE_SKIP or text.endswith(":"):
+                continue
+            if not target.request({"action": "click", "text": text}).get("ok"):
+                continue
+            if current_menu() not in visited:
+                visit(depth + 1)
+            call({"action": "navigate", "target": "back"})
+            if current_menu() != menu_id:
+                call({"action": "navigate", "target": menu_id})
+
+    call({"action": "navigate", "target": "main"})
+    visit(0)
+    return {"ok": True, "folder": str(folder.resolve()), "screens": visited}

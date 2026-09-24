@@ -34,12 +34,16 @@ python3 -m venv .venv
 ```bash
 specter-devtools --target simulator request '{"action":"capabilities"}'
 specter-devtools --target f469 request '{"action":"click","text":"Manage Device"}'
+specter-devtools --target f469 click "Manage Device"
+specter-devtools --target f469 labels --layer top
 specter-devtools --target f469 screenshot /tmp/board.png
 specter-devtools --target simulator capture /tmp/sim-capture
+specter-devtools --target simulator goto manage_security
+specter-devtools --target simulator explore /tmp/screens
 specter-devtools --target f469 board flash analyze firmware.bin
 ```
 
-`request`, `screenshot`, and `capture` return the same JSON shapes on every target; use `capabilities` to discover differences. `board` passes raw commands to the board tool. See [docs/control-contract.md](docs/control-contract.md) for all requests and target differences.
+`request`, `screenshot`, and `capture` return the same JSON shapes on every target; use `capabilities` to discover differences. The shortcuts `click`, `tree`, and `labels` work on every target; `state`, `goto`, `back`, `set`, and `explore` need application state, which only the simulator offers. `board` passes raw commands to the board tool. See [docs/control-contract.md](docs/control-contract.md) for all requests and target differences.
 
 ## Tests
 

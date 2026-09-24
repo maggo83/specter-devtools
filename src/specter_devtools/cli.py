@@ -4,9 +4,11 @@ import argparse
 import json
 import sys
 
-from .artifacts import capture
+from .artifacts import capture, explore, visible_labels
 from .contract import TargetError
 from .targets import SIMULATOR_HOST, SIMULATOR_PORT, TARGETS, make_target
+
+LAYERS = ("screen", "top")
 
 
 def _parse_request(value: str) -> dict:
@@ -14,6 +16,13 @@ def _parse_request(value: str) -> dict:
     if not isinstance(request, dict):
         raise argparse.ArgumentTypeError("request JSON must be an object")
     return request
+
+
+def _parse_value(value: str):
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,6 +39,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     request = commands.add_parser("request", help="Send one canonical UI-control request")
     request.add_argument("request", type=_parse_request)
+    click = commands.add_parser("click", help="Click the widget showing TEXT")
+    click.add_argument("text")
+    click.add_argument("--layer", choices=LAYERS, default="screen")
+    for name, help_text in (("tree", "Print the widget tree"), ("labels", "List visible texts")):
+        layer_command = commands.add_parser(name, help=help_text)
+        layer_command.add_argument("--layer", choices=LAYERS, default="screen")
+    commands.add_parser("state", help="Show application state (simulator only)")
+    goto = commands.add_parser("goto", help="Open a menu by id (simulator only)")
+    goto.add_argument("menu_id")
+    commands.add_parser("back", help="Go back one menu (simulator only)")
+    set_state = commands.add_parser("set", help="Set a device state attribute (simulator only)")
+    set_state.add_argument("attr")
+    set_state.add_argument("value", type=_parse_value, help="JSON value such as true or 3; other text is a string")
+    explore_parser = commands.add_parser(
+        "explore", help="Click through all menus and capture each screen (simulator only)"
+    )
+    explore_parser.add_argument("folder")
+    explore_parser.add_argument("--max-depth", type=int, default=5)
+    explore_parser.add_argument("--settle", type=float, default=1.0, help="Seconds to wait before each capture")
     screenshot = commands.add_parser("screenshot", help="Save the visible framebuffer as PNG")
     screenshot.add_argument("output")
     capture_parser = commands.add_parser("capture", help="Save screenshot, tree, and labels")
@@ -37,6 +65,20 @@ def build_parser() -> argparse.ArgumentParser:
     board = commands.add_parser("board", help="Run a raw board command, e.g. 'board flash analyze x.bin'")
     board.add_argument("arguments", nargs=argparse.REMAINDER)
     return parser
+
+
+def _shortcut_request(args: argparse.Namespace) -> dict:
+    if args.command == "click":
+        return {"action": "click", "text": args.text, "layer": args.layer}
+    if args.command == "tree":
+        return {"action": "tree", "layer": args.layer}
+    if args.command == "state":
+        return {"action": "get_state"}
+    if args.command == "goto":
+        return {"action": "navigate", "target": args.menu_id}
+    if args.command == "back":
+        return {"action": "navigate", "target": "back"}
+    return {"action": "set_state", "attr": args.attr, "value": args.value}
 
 
 def run(args: argparse.Namespace) -> int:
@@ -50,8 +92,16 @@ def run(args: argparse.Namespace) -> int:
         result = target.request(args.request)
     elif args.command == "screenshot":
         result = target.screenshot(args.output)
-    else:
+    elif args.command == "capture":
         result = capture(target, args.folder)
+    elif args.command == "explore":
+        result = explore(target, args.folder, args.max_depth, args.settle)
+    elif args.command == "labels":
+        result = target.request({"action": "tree", "layer": args.layer})
+        if result.get("ok"):
+            result = {"ok": True, "labels": visible_labels(result["tree"]["root"])}
+    else:
+        result = target.request(_shortcut_request(args))
     print(json.dumps(result, sort_keys=True))
     return 0 if result.get("ok") else 1
 
