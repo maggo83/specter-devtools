@@ -150,3 +150,39 @@ class TestFilterReplOutput:
         code = "print('a  b')"
         raw = "print('a  b')\r\na  b\r\n>>> "
         assert filter_repl_output(raw, code) == "a  b"
+
+
+class TestExecCode:
+    """exec_code must return as soon as the REPL prompt comes back."""
+
+    def test_returns_output_without_waiting_for_timeout(self, monkeypatch):
+        from disco_lib import repl
+
+        class FakeSerial:
+            def __init__(self, dev, baud, timeout):
+                self.pending = b""
+                self.written = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def write(self, data):
+                self.written.append(data)
+                if data == b"\x03":
+                    self.pending += b"\r\n>>> "
+                else:
+                    self.pending += data + b"42\r\n>>> "
+
+            def read_until(self, expected):
+                end = self.pending.index(expected) + len(expected)
+                data, self.pending = self.pending[:end], self.pending[end:]
+                return data
+
+            def read(self, size):
+                raise AssertionError("fixed-size reads wait for the full timeout")
+
+        monkeypatch.setattr(repl.pyserial, "Serial", FakeSerial)
+        assert repl.exec_code("/dev/fake", "print(6*7)") == "42"

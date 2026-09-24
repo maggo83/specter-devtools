@@ -69,18 +69,13 @@ def exec_raw(dev: str, code: str, baud: int = BAUD_RATE, timeout: float = 5.0) -
 def exec_code(dev: str, code: str, baud: int = BAUD_RATE, timeout: float = 3.0) -> str:
     """Execute Python code on REPL and return output."""
     with pyserial.Serial(dev, baud, timeout=timeout) as ser:
-        # Interrupt any running code
+        # Interrupt any running code and wait for the prompt
         ser.write(b"\x03")
-        time.sleep(0.1)
-        # Clear buffer
-        ser.read(4096)
+        ser.read_until(b">>> ")
 
-        # Send code
+        # Send code; the output ends when the next prompt appears
         ser.write(code.encode() + b"\r\n")
-        time.sleep(0.5)
-
-        # Read response
-        data = ser.read(8192)
+        data = ser.read_until(b"\r\n>>> ")
         text = data.decode("utf-8", errors="replace")
 
         return filter_repl_output(text, code)
