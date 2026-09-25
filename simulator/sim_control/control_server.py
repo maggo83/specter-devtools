@@ -10,7 +10,6 @@ class ControlServer:
     """Non-blocking TCP server for remote control of simulator."""
 
     def __init__(self, nav_controller, port=9876):
-        self.nav = nav_controller
         control.bind_application(nav_controller)
         self.port = port
         self.socket = socket.socket()
@@ -85,96 +84,16 @@ class ControlServer:
                 pass
 
     def _handle_command(self, cmd):
-        """Route command to handler."""
+        """Route a command: the shared control contract, or a raw screenshot."""
         action = cmd.get("action")
-
-        if action == "widget_tree":
-            return self._cmd_widget_tree()
-        elif action == "click":
-            return self._cmd_click(cmd)
-        elif action == "get_state":
-            return self._cmd_get_state()
-        elif action == "set_state":
-            return self._cmd_set_state(cmd)
-        elif action == "ping":
-            return {"ok": True, "pong": True}
-        elif action == "screenshot":
-            return self._cmd_screenshot()
-        elif action == "navigate":
-            return self._cmd_navigate(cmd)
-        elif action == "dropup":
-            return self._cmd_dropup(cmd)
-        elif action == "write_text":
-            return control.write_text(
-                cmd.get("text", ""),
-                path=cmd.get("path"),
-                target=cmd.get("target", 0),
-                layer=cmd.get("layer", "screen"),
-            )
-        elif action == "capabilities":
-            return control.capabilities()
-        elif action == "control":
+        if action == "control":
             return control.handle(cmd.get("request", {}))
-        else:
-            return {"ok": False, "error": "Unknown action: " + str(action)}
-
-    def _cmd_dropup(self, cmd):
-        """Directly toggle / open / close a drop-up panel."""
-        which = cmd.get("which", "seed")   # "seed" or "wallet"
-        op = cmd.get("op", "toggle")        # "toggle", "open", "close"
-        nav = self.nav
-        dropup = getattr(nav, "_seed_dropup" if which == "seed" else "_wallet_dropup", None)
-        if dropup is None:
-            return {"ok": False, "error": "dropup not registered: " + which}
-        try:
-            if op == "open":
-                dropup.open()
-            elif op == "close":
-                dropup.close()
-            else:
-                dropup.toggle()
-            return {"ok": True, "op": op, "which": which, "is_open": dropup.is_open()}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
-
-    def _cmd_navigate(self, cmd):
-        """Navigate to a menu or back."""
-        return control.navigate(cmd.get("target"))
-
-    def _cmd_widget_tree(self):
-        """Return full widget tree (screen + layer_top)."""
-        tree = control.get_tree()["root"]
-        # Also include layer_top (where modals/overlays live)
-        try:
-            top = control.get_tree("top")["root"]
-            if top["children"]:
-                tree["layer_top"] = top
-        except:
-            pass
-        return {"ok": True, "tree": tree}
-
-    def _cmd_click(self, cmd):
-        """Click widget by text or screen coordinates."""
-        return control.click(
-            text=cmd.get("text"),
-            path=cmd.get("path"),
-            x=cmd.get("x"),
-            y=cmd.get("y"),
-            layer=cmd.get("layer", "screen"),
-        )
-
-    def _cmd_get_state(self):
-        """Return DeviceState and UIState."""
-        if not control.has_application():
-            control.bind_application(self.nav)
-        return control.get_state()
-
-    def _cmd_set_state(self, cmd):
-        """Set attribute on DeviceState."""
-        return control.set_state(cmd.get("attr"), cmd.get("value"))
+        if action == "screenshot":
+            return self._cmd_screenshot()
+        return {"ok": False, "error": "Unknown action: " + str(action)}
 
     def _cmd_screenshot(self):
-        """Capture screenshot - writes to file, returns path for MCP to read."""
+        """Capture a screenshot to a raw RGB565 file and return its path."""
         try:
             import SDL
             # Write screenshot directly to file (bypasses Python heap)
