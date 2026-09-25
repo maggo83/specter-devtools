@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from specter_devtools import cli
-from specter_devtools.artifacts import capture, visible_labels
+from specter_devtools.artifacts import capture, explore, visible_labels
 from specter_devtools.png import save_rgb565_png
 from specter_devtools.targets import DEFAULT_F469_DISCO, F469Target, TargetError, make_target
 
@@ -157,31 +157,58 @@ def test_labels_prints_visible_texts(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out) == {"labels": ["Settings"], "ok": True}
 
 
-class FakeMenuApp:
-    MENUS = {"main": ["Main Menu", "Settings", "OK"], "settings": ["Settings Menu", "Language"]}
-    LINKS = {"Settings": "settings"}
+def _dialog(*buttons, index=0):
+    return [{"type": "obj", "path": [index], "children": [
+        {"type": "button", "path": [index, i], "text": None,
+         "children": [{"type": "label", "path": [index, i, 0], "text": text, "children": []}]}
+        for i, text in enumerate(buttons)
+    ]}]
 
-    def __init__(self):
+
+class FakeMenuApp:
+    MENUS = {"main": ["Main Menu", "Settings", "Load File", "OK"], "settings": ["Settings Menu", "Language"]}
+    LINKS = {"Settings": "settings"}
+    DIALOGS = {"Load File": ("Close",)}
+
+    def __init__(self, startup=(), stacked=1):
         self.history = ["main"]
+        self.top = [overlay for i in range(stacked) for overlay in _dialog(*startup, index=i)] if startup else []
+        self.requests = []
 
     def request(self, request):
+        self.requests.append(request)
         action = request["action"]
         if action == "get_state":
             return {"ok": True, "ui": {"current_menu_id": self.history[-1]}}
+        if action == "wait":
+            return {"ok": True, "settled": True}
         if action == "navigate":
             if request["target"] != "back":
                 self.history.append(request["target"])
             elif len(self.history) > 1:
                 self.history.pop()
             return {"ok": True}
+        if action == "click" and request.get("layer") == "top":
+            overlay, index = request["path"][:2]
+            assert overlay == len(self.top) - 1, "only the topmost dialog can be tapped"
+            if self.top[overlay]["children"][index]["children"][0]["text"] in ("Close", "Skip Tour"):
+                self.top.pop()
+            return {"ok": True}
         if action == "click":
+            if self.top:
+                return {"ok": False, "error": "Widget is covered or off-screen at (1, 1)"}
             if request["text"] in self.LINKS:
                 self.history.append(self.LINKS[request["text"]])
+            if request["text"] in self.DIALOGS:
+                self.top = _dialog(*self.DIALOGS[request["text"]])
             return {"ok": True}
+        if request.get("layer") == "top":
+            return {"ok": True, "tree": {"layer": "top", "root": {"type": "obj", "path": [], "children": self.top}}}
         children = [{"text": text, "children": []} for text in self.MENUS[self.history[-1]]]
         return {"ok": True, "tree": {"layer": "screen", "root": {"text": None, "children": children}}}
 
     def screenshot(self, output):
+        self.requests.append({"action": "screenshot"})
         output.write_bytes(b"png")
         return {"ok": True, "file": str(output)}
 
@@ -193,6 +220,41 @@ def test_explore_captures_every_reachable_menu(monkeypatch, capsys, tmp_path):
     assert json.loads(capsys.readouterr().out)["screens"] == ["main", "settings"]
     assert (tmp_path / "settings" / "labels.txt").read_text() == "Settings Menu\nLanguage\n"
     assert (tmp_path / "main" / "screenshot.png").exists()
+
+
+def test_explore_waits_for_the_ui_before_every_capture(tmp_path):
+    app = FakeMenuApp()
+    explore(app, tmp_path)
+
+    actions = [request["action"] for request in app.requests]
+    captures = [i for i, action in enumerate(actions) if action == "screenshot"]
+    assert len(captures) == 3  # main, main__Load File, settings
+    assert all(actions[i - 2:i] == ["wait", "tree"] for i in captures)
+
+
+def test_explore_captures_and_closes_the_dialogs_it_opens(tmp_path):
+    result = explore(FakeMenuApp(), tmp_path)
+
+    assert result["dialogs"] == ["main__Load File"]
+    assert result["screens"] == ["main", "settings"]
+    assert (tmp_path / "main__Load File" / "screenshot.png").exists()
+    assert (tmp_path / "main__Load File" / "labels.txt").read_text() == "Close\n"
+
+
+def test_explore_closes_stacked_startup_dialogs_by_their_dismiss_buttons(tmp_path):
+    result = explore(FakeMenuApp(startup=("<", "Skip Tour", ">"), stacked=2), tmp_path)
+
+    assert result["dialogs"][0] == "startup"
+    assert result["screens"] == ["main", "settings"]
+
+
+def test_explore_stops_at_a_dialog_it_cannot_close_safely(tmp_path):
+    app = FakeMenuApp()
+    app.DIALOGS = {"Load File": ("Delete", "Keep")}
+
+    with pytest.raises(TargetError, match="Cannot close the dialog captured in .*main__Load File"):
+        explore(app, tmp_path)
+    assert not any(request.get("layer") == "top" and request["action"] == "click" for request in app.requests)
 
 
 def test_explore_fails_visibly_without_application_state(monkeypatch, capsys, tmp_path):

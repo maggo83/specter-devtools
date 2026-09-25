@@ -6,6 +6,7 @@ from pathlib import Path
 from .contract import ControlResponse, ControlTarget, TargetError
 
 _EXPLORE_SKIP = ("eng", "OK", "Cancel", "Back")
+_DISMISS_LABELS = ("Close", "Cancel", "Skip Tour")
 
 
 def visible_labels(node: dict) -> list[str]:
@@ -23,11 +24,11 @@ def visible_labels(node: dict) -> list[str]:
     return labels
 
 
-def capture(target: ControlTarget, folder: Path) -> ControlResponse:
+def capture(target: ControlTarget, folder: Path, layer: str = "screen") -> ControlResponse:
     """Save a screenshot, canonical tree, and labels from any target."""
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
-    tree_result = target.request({"action": "tree"})
+    tree_result = target.request({"action": "tree"} if layer == "screen" else {"action": "tree", "layer": layer})
     if not tree_result.get("ok"):
         return tree_result
 
@@ -51,10 +52,43 @@ def capture(target: ControlTarget, folder: Path) -> ControlResponse:
     }
 
 
+def _top_layer(target: ControlTarget) -> dict:
+    result = target.request({"action": "tree", "layer": "top"})
+    if not result.get("ok"):
+        raise TargetError(result.get("error", "tree failed"))
+    return result["tree"]["root"]
+
+
+def _buttons(node: dict) -> list[dict]:
+    if "button" in node.get("type", "").lower():
+        return [node]
+    return [button for child in node.get("children", []) for button in _buttons(child)]
+
+
+def _close_dialog(target: ControlTarget, top: dict) -> bool:
+    """Close stacked dialogs from the topmost down, each by its only button or
+    its button with a dismiss label."""
+    for _ in range(5):
+        if not top.get("children"):
+            return True
+        buttons = _buttons(top["children"][-1])
+        if len(buttons) != 1:
+            buttons = [b for b in buttons if set(visible_labels(b)) & set(_DISMISS_LABELS)]
+        if len(buttons) != 1:
+            return False
+        target.request({"action": "click", "path": buttons[0]["path"], "layer": "top"})
+        top = _top_layer(target)
+    return not top.get("children")
+
+
 def explore(target: ControlTarget, folder: Path, max_depth: int = 5) -> ControlResponse:
-    """Click through every menu reachable from main and capture each screen."""
+    """Click through every menu reachable from main and capture each screen.
+
+    A click that opens a dialog captures it as "<menu>__<item>" and closes it.
+    Exploring stops with an error when a dialog cannot be closed safely.
+    """
     folder = Path(folder)
-    visited = []
+    visited, dialogs = [], []
 
     def call(request):
         result = target.request(request)
@@ -65,27 +99,42 @@ def explore(target: ControlTarget, folder: Path, max_depth: int = 5) -> ControlR
     def current_menu():
         return call({"action": "get_state"})["ui"]["current_menu_id"]
 
+    def snapshot(name, layer="screen"):
+        call({"action": "wait"})
+        result = capture(target, folder / name, layer)
+        if not result.get("ok"):
+            raise TargetError(result.get("error", "capture failed"))
+        return json.loads(Path(result["files"]["tree"]).read_text())
+
+    def dismiss(name):
+        top = _top_layer(target)
+        if not top.get("children"):
+            return
+        snapshot(name, "top")
+        dialogs.append(name)
+        if not _close_dialog(target, top):
+            raise TargetError("Cannot close the dialog captured in " + str(folder / name))
+
     def visit(depth):
         menu_id = current_menu()
         if depth > max_depth or menu_id in visited:
             return
         visited.append(menu_id)
-        call({"action": "wait"})
-        result = capture(target, folder / menu_id)
-        if not result.get("ok"):
-            raise TargetError(result.get("error", "capture failed"))
-        tree = json.loads(Path(result["files"]["tree"]).read_text())
+        tree = snapshot(menu_id)
         for text in visible_labels(tree["root"]):
             if len(text) <= 2 or text.isdigit() or text in _EXPLORE_SKIP or text.endswith(":"):
                 continue
             if not target.request({"action": "click", "text": text}).get("ok"):
                 continue
-            if current_menu() not in visited:
-                visit(depth + 1)
+            dismiss(menu_id + "__" + text.replace("/", "_"))
+            if current_menu() == menu_id:
+                continue
+            visit(depth + 1)
             call({"action": "navigate", "target": "back"})
             if current_menu() != menu_id:
                 call({"action": "navigate", "target": menu_id})
 
     call({"action": "navigate", "target": "main"})
+    dismiss("startup")
     visit(0)
-    return {"ok": True, "folder": str(folder.resolve()), "screens": visited}
+    return {"ok": True, "folder": str(folder.resolve()), "screens": visited, "dialogs": dialogs}

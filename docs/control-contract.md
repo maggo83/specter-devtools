@@ -61,3 +61,7 @@ The client converts both to PNG with the same response shape; simulator PNGs car
 ## Visual Validation
 
 After every state-changing input, capture a screenshot and treat it as the source of truth. Trees and command responses can include hidden, disabled, stale, or mid-animation widgets. Check the `top` layer for overlays before acting on the screen beneath. A reply with `"settled": false` means the screen may still be changing; send `wait` before capturing.
+
+## Explore
+
+`explore` starts at `main` and taps every label on each screen, capturing every menu it reaches. When a tap opens a dialog on the `top` layer, it captures the dialog as `<menu>__<label>` and closes it: by its only button, or by the button labelled `Close`, `Cancel`, or `Skip Tour`. Stacked dialogs are closed from the topmost down. If no such button exists, `explore` stops with an error rather than guess. It also taps action buttons such as `Create`, so it can change device state; run it on test data only.
