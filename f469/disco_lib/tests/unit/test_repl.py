@@ -9,6 +9,8 @@ The key testable logic is in filter_repl_output, which must handle
 the messy reality of serial REPL output (echoes, prompts, \r\n, etc).
 """
 
+import pytest
+
 from disco_lib.repl import filter_repl_output
 
 
@@ -155,7 +157,8 @@ class TestFilterReplOutput:
 class TestExecCode:
     """exec_code must return as soon as the REPL prompt comes back."""
 
-    def test_returns_output_without_waiting_for_timeout(self, monkeypatch):
+    @pytest.mark.parametrize("after_interrupt", [b"\r\n>>> ", b"old\r\n>>> \r\n>>> "])
+    def test_returns_output_without_waiting_for_timeout(self, monkeypatch, after_interrupt):
         from disco_lib import repl
 
         class FakeSerial:
@@ -172,7 +175,7 @@ class TestExecCode:
             def write(self, data):
                 self.written.append(data)
                 if data == b"\x03":
-                    self.pending += b"\r\n>>> "
+                    self.pending += after_interrupt
                 else:
                     self.pending += data + b"42\r\n>>> "
 

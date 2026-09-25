@@ -73,8 +73,9 @@ def exec_code(dev: str, code: str, baud: int = BAUD_RATE, timeout: float = 3.0) 
         ser.write(b"\x03")
         ser.read_until(b">>> ")
 
-        # Send code; the output ends when the next prompt appears
+        # Send code; skip stale prompts up to its echo, then read until the next prompt
         ser.write(code.encode() + b"\r\n")
+        ser.read_until(code.splitlines()[0].encode() + b"\r\n")
         data = ser.read_until(b"\r\n>>> ")
         text = data.decode("utf-8", errors="replace")
 
