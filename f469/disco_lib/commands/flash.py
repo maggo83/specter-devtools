@@ -242,54 +242,67 @@ def flash_read(file: str, addr: str, size: str):
 
 @flash.command("verify")
 @click.argument("file", type=click.Path(exists=True))
-@click.option("--addr", default="0x08020000", help="Flash address (default: 0x08020000)")
+@click.option("--addr", default=None, help="Flash address (auto-detected like 'program' if not given)")
 @click.option("--smart/--full", default=True, help="Smart verify skips internal zeros (default: smart)")
-def flash_verify(file: str, addr: str, smart: bool):
+@click.option("--include-fs", is_flag=True,
+              help="Also fail if the internal filesystem changed (smart mode)")
+def flash_verify(file: str, addr: str | None, smart: bool, include_fs: bool):
     """Verify flash contents against file.
 
-    By default uses smart verification that skips zero-padded regions
-    between code sections. Use --full for strict byte-by-byte verification.
+    By default uses smart verification: code regions must match, zero-padded
+    gaps are skipped, and the internal filesystem (0x08008000-0x0801FFFF) is
+    reported separately, because the firmware writes settings there once it
+    runs. Use --include-fs to fail on filesystem changes too, or --full for a
+    strict byte-by-byte OpenOCD verify.
 
     \b
     Examples:
       disco flash verify firmware.bin
-      disco flash verify firmware.bin --full    # Strict verify
+      disco flash verify firmware.bin --include-fs   # Filesystem must match too
+      disco flash verify firmware.bin --full         # Strict verify
       disco flash verify bootloader.bin --addr 0x08000000
     """
     file = os.path.abspath(file)
     size = os.path.getsize(file)
-
-    # Parse address
-    if addr.startswith("0x"):
-        addr_int = int(addr, 16)
-    else:
-        addr_int = int(addr)
-
     regions = flash_backend.analyze_firmware(file)
     internal_zeros = flash_backend.has_internal_zeros(regions)
+
+    if addr is None:
+        addr_int = flash_backend.detect_flash_address(regions, internal_zeros)
+        addr_note = " (auto-detected)"
+    else:
+        addr_int = int(addr, 16) if addr.startswith("0x") else int(addr)
+        addr_note = ""
 
     click.secho("=== Verifying Flash ===", fg="blue")
     click.echo(f"File: {file}")
     click.echo(f"Size: {size:,} bytes ({size/1024:.1f} KB)")
-    click.echo(f"Address: 0x{addr_int:08x}")
+    click.echo(f"Address: 0x{addr_int:08x}{addr_note}")
     click.echo(f"Mode: {'smart (code regions only)' if smart else 'full (strict)'}")
-
-    if internal_zeros and smart:
-        click.secho("Note: File has zeros between code - will verify code regions only", fg="yellow")
     click.echo()
 
     with get_ocd().ensure_running():
-        # Use business layer verify_firmware which handles halt/resume internally
-        success = flash_backend.verify_firmware(get_ocd(), file, addr_int, smart)
+        if smart and internal_zeros:
+            result = flash_backend.verify_regions(get_ocd(), file, addr_int)
+        else:
+            result = {"code": flash_backend.verify_firmware(get_ocd(), file, addr_int, smart), "fs": None}
 
-    if success:
+    if result["fs"] is True:
+        click.echo("Filesystem: unchanged since flashing")
+    elif result["fs"] is False:
+        click.secho("Filesystem: changed since flashing (expected once the firmware has run)", fg="yellow")
+
+    if result["code"] and not (include_fs and result["fs"] is False):
         click.secho("Verification PASSED!", fg="green")
-    else:
-        click.secho("Verification FAILED!", fg="red")
-        if internal_zeros and not smart:
-            click.echo()
-            click.secho("Hint: File has zeros between code regions.", fg="yellow")
-            click.echo("Use 'disco flash verify --smart' to skip these areas.")
+        return
+    click.secho("Verification FAILED!", fg="red")
+    if result["code"]:
+        click.echo("Code regions match; only the filesystem differs (--include-fs).")
+    elif internal_zeros and not smart:
+        click.echo()
+        click.secho("Hint: File has zeros between code regions.", fg="yellow")
+        click.echo("Use 'disco flash verify --smart' to skip these areas.")
+    raise SystemExit(1)
 
 
 @flash.command("erase")

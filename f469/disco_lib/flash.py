@@ -285,6 +285,71 @@ def program_firmware(
     return True
 
 
+# Internal MicroPython filesystem (FLASH_FS, sectors 2-4): firmware writes it at runtime.
+FS_START = 0x08008000
+FS_END = 0x08020000
+
+
+def _split_at_fs(code_regions: List[Tuple[int, int]], addr: int) -> Tuple[list, list]:
+    """Split file-relative code regions into (outside, inside) the filesystem window."""
+    outside, inside = [], []
+    fs_start, fs_end = FS_START - addr, FS_END - addr
+    for start, end in code_regions:
+        cut_start, cut_end = max(start, fs_start), min(end, fs_end)
+        if cut_start >= cut_end:
+            outside.append((start, end))
+            continue
+        if start < cut_start:
+            outside.append((start, cut_start))
+        inside.append((cut_start, cut_end))
+        if cut_end < end:
+            outside.append((cut_end, end))
+    return outside, inside
+
+
+def _regions_match(ocd: OpenOCD, filepath: str, addr: int, regions: List[Tuple[int, int]]) -> bool:
+    import tempfile
+
+    for region_start, region_end in regions:
+        region_size = region_end - region_start
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".bin") as tmp:
+            tmp_path = tmp.name
+        try:
+            read_timeout = max(60, int(region_size / (50 * 1024)) + 30)
+            ocd.send(f"dump_image {tmp_path} 0x{addr + region_start:x} {region_size}", timeout=read_timeout)
+            with open(filepath, "rb") as f:
+                f.seek(region_start)
+                file_data = f.read(region_size)
+            with open(tmp_path, "rb") as f:
+                if f.read() != file_data:
+                    return False
+        except OSError:
+            return False
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+    return True
+
+
+def verify_regions(ocd: OpenOCD, filepath: str, addr: int = 0x08000000) -> Dict[str, bool | None]:
+    """Compare flash with the file's code regions; the filesystem is judged separately.
+
+    Returns {"code": bool, "fs": bool | None}; "fs" is None when the file has no
+    data in the filesystem window.
+    """
+    filepath = os.path.abspath(filepath)
+    outside, inside = _split_at_fs(get_code_regions(analyze_firmware(filepath)), addr)
+
+    # Use longer timeout for halt - target may be booting after reset
+    ocd.send("halt", timeout=10)
+    try:
+        code_ok = _regions_match(ocd, filepath, addr, outside)
+        fs_ok = _regions_match(ocd, filepath, addr, inside) if inside else None
+    finally:
+        ocd.send("resume")
+    return {"code": code_ok, "fs": fs_ok}
+
+
 def verify_firmware(
     ocd: OpenOCD,
     filepath: str,
@@ -302,52 +367,20 @@ def verify_firmware(
     Returns:
         True if verification passed
     """
-    import tempfile
-
     filepath = os.path.abspath(filepath)
     regions = analyze_firmware(filepath)
-    code_regions = get_code_regions(regions)
-    internal_zeros = has_internal_zeros(regions)
+    if smart and has_internal_zeros(regions) and get_code_regions(regions):
+        result = verify_regions(ocd, filepath, addr)
+        return result["code"] and result["fs"] is not False
 
     # Use longer timeout for halt - target may be booting after reset
     ocd.send("halt", timeout=10)
-
     try:
-        if smart and internal_zeros and len(code_regions) > 0:
-            # Smart verify: only check code regions
-            for region_start, region_end in code_regions:
-                region_size = region_end - region_start
-                flash_addr = addr + region_start
-
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".bin") as tmp:
-                    tmp_path = tmp.name
-
-                read_timeout = max(60, int(region_size / (50 * 1024)) + 30)
-                ocd.send(f"dump_image {tmp_path} 0x{flash_addr:x} {region_size}", timeout=read_timeout)
-
-                try:
-                    with open(filepath, "rb") as f:
-                        f.seek(region_start)
-                        file_data = f.read(region_size)
-
-                    with open(tmp_path, "rb") as f:
-                        flash_data = f.read()
-
-                    os.unlink(tmp_path)
-
-                    if file_data != flash_data:
-                        return False
-                except Exception:
-                    return False
-
-            return True
-        else:
-            # Full verify via OpenOCD
-            size = os.path.getsize(filepath)
-            timeout = max(60, int(size / (50 * 1024)) + 30)
-            result = ocd.send(f"verify_image {filepath} 0x{addr:08x}", timeout=timeout)
-            result_lower = result.lower()
-            return "verified" in result_lower and "error" not in result_lower
+        size = os.path.getsize(filepath)
+        timeout = max(60, int(size / (50 * 1024)) + 30)
+        result = ocd.send(f"verify_image {filepath} 0x{addr:08x}", timeout=timeout)
+        result_lower = result.lower()
+        return "verified" in result_lower and "error" not in result_lower
     finally:
         # Always resume CPU after verification
         ocd.send("resume")
