@@ -492,6 +492,7 @@ def unlock_rdp(ocd: OpenOCD) -> str:
 
     Returns raw OpenOCD output.
     """
+    ocd.send("halt")
     return ocd.send("stm32f4x unlock 0", timeout=30.0)
 
 
@@ -504,4 +505,5 @@ def lock_rdp(ocd: OpenOCD) -> str:
 
     Returns raw OpenOCD output.
     """
+    ocd.send("halt")
     return ocd.send("stm32f4x lock 0", timeout=10.0)

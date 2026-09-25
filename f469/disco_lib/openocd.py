@@ -114,10 +114,8 @@ class OpenOCD:
             time.sleep(0.3)
             if self.is_running():
                 click.secho("OpenOCD connected successfully", fg="green")
-                # Halt and show basic info
-                self.send("halt")
-                pc = self.send("reg pc")
-                click.echo(f"Target info:\n{pc}")
+                # Report without halting: a halted CPU stops the UI and USB CDC.
+                click.echo(f"Target info:\n{self.send('targets')}")
                 return True
 
         click.secho(f"Failed to connect. Check {OPENOCD_LOG}", fg="red")

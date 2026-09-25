@@ -252,3 +252,17 @@ class TestStartStop:
             call_args = mock_run.call_args[0][0]
             assert "pkill" in call_args
             assert "openocd" in call_args
+
+
+class TestStartDoesNotHalt:
+    """Starting OpenOCD must leave the CPU running (a halt stops UI and USB CDC)."""
+
+    def test_start_reports_target_state_without_halting(self, mock_subprocess):
+        sent = []
+        with patch.object(OpenOCD, "is_running", side_effect=[False, True]), \
+             patch.object(OpenOCD, "send", side_effect=lambda cmd, **kw: sent.append(cmd) or "running"), \
+             patch("disco_lib.openocd.time.sleep"), patch("builtins.open", MagicMock()):
+            assert OpenOCD().start() is True
+
+        assert "halt" not in sent
+        assert sent == ["targets"]
