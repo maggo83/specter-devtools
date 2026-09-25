@@ -28,8 +28,13 @@ specter-devtools --target f469 capture /tmp/board-capture
 | `get_state` | none | MockUI device and navigation state. |
 | `navigate` | menu `target` or `back` | Updated MockUI state. |
 | `set_state` | public `attr`, JSON `value` | State update and redraw. |
+| `wait` | optional `timeout_ms` | Returns once the UI has settled (see below). |
 
 Tree paths are zero-based integer arrays such as `[0, 1, 2]`, valid only for the current snapshot; navigation, animation, or rebuilds can change them. Prefer unique text; use paths for icon-only controls.
+
+## Settling
+
+`click`, `touch`, `navigate`, `set_state`, and `wait` reply only once the UI has settled: the finger is lifted, no LVGL animation has run for 70 ms, and at least 70 ms have passed. The reply then carries `"settled": true`. After `timeout_ms` (default 3000) it replies anyway with `"settled": false`; the UI may still be animating. The check reads LVGL's animation count through the REPL or simulator, without changes to the firmware.
 
 ## Touch
 
@@ -55,4 +60,4 @@ The client converts both to PNG with the same response shape; simulator PNGs car
 
 ## Visual Validation
 
-After every state-changing input, capture a screenshot and treat it as the source of truth. Trees and command responses can include hidden, disabled, stale, or mid-animation widgets. Check the `top` layer for overlays before acting on the screen beneath. On hardware, allow about 1.2 seconds after each input for transitions to finish before the next request.
+After every state-changing input, capture a screenshot and treat it as the source of truth. Trees and command responses can include hidden, disabled, stale, or mid-animation widgets. Check the `top` layer for overlays before acting on the screen beneath. A reply with `"settled": false` means the screen may still be changing; send `wait` before capturing.

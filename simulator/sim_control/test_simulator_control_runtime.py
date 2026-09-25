@@ -181,7 +181,7 @@ def test_touch_request_plays_the_given_points(monkeypatch):
     pointer = _install_touch(monkeypatch, None)
     points = [[10, 10, 0], [90, 10, 300]]
 
-    assert control.handle({"action": "touch", "points": points}) == {"ok": True, "duration_ms": 300}
+    assert control.handle({"action": "touch", "points": points}) == {"ok": True, "duration_ms": 300, "_settle_ms": 3000}
     assert pointer.gestures == [points]
 
 
@@ -221,3 +221,10 @@ def test_handle_uses_one_json_compatible_request_and_response(monkeypatch):
             "text": None,
         },
     }
+
+def test_only_visible_changes_wait_for_the_ui_to_settle(monkeypatch):
+    _install_screen(monkeypatch)
+
+    assert "_settle_ms" not in control.handle({"action": "tree"})
+    assert control.handle({"action": "wait", "timeout_ms": 500}) == {"ok": True, "_settle_ms": 500}
+    assert control.handle({"action": "wait", "timeout_ms": "x"})["_settle_ms"] == 3000

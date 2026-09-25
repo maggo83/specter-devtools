@@ -17,12 +17,14 @@ RESPONSE_TIMEOUT = 5.0
 
 
 def gesture_seconds(request: ControlRequest) -> float:
-    """Return how long a touch request keeps the finger down."""
+    """Return how long a request may keep the device busy: gesture plus settle wait."""
+    timeout_ms = request.get("timeout_ms", 3000)
+    settle = timeout_ms / 1000 if isinstance(timeout_ms, int) and not isinstance(timeout_ms, bool) else 3.0
     points = request.get("points") if request.get("action") == "touch" else None
     try:
-        return max(0.0, float(points[-1][2]) / 1000)
+        return max(0.0, float(points[-1][2]) / 1000) + settle
     except (TypeError, ValueError, IndexError, KeyError):
-        return 0.0
+        return settle
 
 
 class SimulatorTarget:

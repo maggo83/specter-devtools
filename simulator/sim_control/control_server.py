@@ -4,6 +4,7 @@ import json
 import lvgl as lv
 
 from . import simulator_control_runtime as control
+from . import touch
 
 
 class ControlServer:
@@ -22,6 +23,7 @@ class ControlServer:
         self.client = None
         self.buf = b""
         self.pending = None
+        self.settle = None
 
         # Create LVGL timer to poll for commands
         self.timer = lv.timer_create(self._poll, 50, None)
@@ -32,8 +34,13 @@ class ControlServer:
         if self.pending is not None:
             if control.pointer().busy():
                 return
+            if self.settle is None:
+                self.settle = touch.Settle(self.pending.pop("_settle_ms"))
+            if not self.settle.done():
+                return
+            self.pending["settled"] = not self.settle.timed_out
             self._send_response(self.pending)
-            self.pending = None
+            self.pending = self.settle = None
         self._process_commands()
 
     def _check_connection(self):
@@ -68,8 +75,8 @@ class ControlServer:
                 response = self._handle_command(cmd)
             except Exception as e:
                 response = {"ok": False, "error": str(e)}
-            # Gestures play over later LVGL cycles; reply once the finger lifts.
-            if response.get("ok") and "duration_ms" in response:
+            # Changes play out over later LVGL cycles; reply once the UI settles.
+            if "_settle_ms" in response:
                 self.pending = response
             else:
                 self._send_response(response)

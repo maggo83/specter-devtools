@@ -42,11 +42,12 @@ specter-devtools --target f469 labels --layer top
 specter-devtools --target f469 screenshot /tmp/board.png
 specter-devtools --target simulator capture /tmp/sim-capture
 specter-devtools --target simulator goto manage_security
+specter-devtools --target f469 wait
 specter-devtools --target simulator explore /tmp/screens
 specter-devtools --target f469 board flash analyze firmware.bin
 ```
 
-`request`, `screenshot`, and `capture` return the same JSON shapes on every target; use `capabilities` to discover differences. The shortcuts `click`, `tap`, `long-press`, `drag`, `tree`, and `labels` work on every target; clicks and gestures go through a virtual LVGL pointer, like a real finger. `state`, `goto`, `back`, `set`, and `explore` need MockUI's application state, on the simulator or on a board running MockUI firmware. `board` passes raw commands to the board tool. See [docs/control-contract.md](docs/control-contract.md) for all requests and target differences.
+`request`, `screenshot`, and `capture` return the same JSON shapes on every target; use `capabilities` to discover differences. The shortcuts `click`, `tap`, `long-press`, `drag`, `tree`, and `labels` work on every target; clicks and gestures go through a virtual LVGL pointer, like a real finger, and reply once the UI has settled (`wait` does only that). `state`, `goto`, `back`, `set`, and `explore` need MockUI's application state, on the simulator or on a board running MockUI firmware. `board` passes raw commands to the board tool. See [docs/control-contract.md](docs/control-contract.md) for all requests and target differences.
 
 ## Tests
 

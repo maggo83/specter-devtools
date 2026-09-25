@@ -282,6 +282,11 @@ else:
     _devtools_result = _devtools_run(_devtools_touch, _devtools_app_control, globals().get($APP_GLOBAL))
     while _devtools_result.get('ok') and _devtools_touch.pointer.busy():
         utime.sleep_ms(10)
+    if _devtools_result.get('ok') and $SETTLE_MS is not None:
+        _devtools_settle = _devtools_touch.Settle($SETTLE_MS)
+        while not _devtools_settle.done():
+            utime.sleep_ms(10)
+        _devtools_result['settled'] = not _devtools_settle.timed_out
     print(json.dumps(_devtools_result))
 """
 
@@ -479,10 +484,13 @@ def _install_device_modules(dev, baud, timeout):
         _run_path_script(dev, script, baud, timeout, "Device module install")
 
 
-def _device_request(dev, body, baud, timeout, **values):
-    """Run a body with the shared device modules and return its JSON result."""
-    script = _fill(_DEVICE_SCRIPT, SOURCE_HASH=repr(_DEVICE_HASH),
-                   APP_GLOBAL=repr(_APP_GLOBAL), BODY=_fill(body, **values))
+def _device_request(dev, body, baud, timeout, settle_ms=None, **values):
+    """Run a body with the shared device modules and return its JSON result.
+
+    With settle_ms, the result comes once the UI has stopped animating.
+    """
+    script = _fill(_DEVICE_SCRIPT, SOURCE_HASH=repr(_DEVICE_HASH), APP_GLOBAL=repr(_APP_GLOBAL),
+                   SETTLE_MS=repr(settle_ms), BODY=_fill(body, **values))
     for attempt in range(2):
         try:
             output = repl_backend.exec_raw(dev, script, baud, timeout)
@@ -518,6 +526,12 @@ def _tree_request(dev, layer, baud, timeout):
     return _parse_streamed_tree(output, layer)
 
 
+def _settle_timeout(request):
+    """Settle timeout in ms from the request, or the device default."""
+    timeout = request.get("timeout_ms", 3000)
+    return timeout if _is_int(timeout) and timeout >= 0 else 3000
+
+
 def _has_application(dev, baud, timeout):
     try:
         output = repl_backend.exec_raw(dev, "print(%r in globals())" % _APP_GLOBAL, baud, timeout)
@@ -545,36 +559,41 @@ def _generic_control_request(dev, request, baud, timeout):
                 "tree": True, "find": True,
                 "click": ["text", "path", "coordinates"],
                 "touch": True,
+                "wait": True,
                 "write_text": ["path", "textarea_index"],
                 "layers": ["screen", "top"],
             },
             "application": _has_application(dev, baud, timeout),
         }
+    settle_ms = _settle_timeout(request)
+    if action == "wait":
+        return _device_request(dev, "    return {'ok': True}\n", baud, timeout, settle_ms)
     if action == "get_state":
         return _device_request(dev, _APP_BODY, baud, timeout, CALL="app_control.get_state(app)")
     if action == "navigate":
         target = request.get("target", "back")
         if target is not None and not isinstance(target, str):
             return {"ok": False, "error": "navigate target must be a menu id or 'back'"}
-        return _device_request(dev, _APP_BODY, baud, timeout,
+        return _device_request(dev, _APP_BODY, baud, timeout, settle_ms,
                                CALL="app_control.navigate(app, %r)" % target)
     if action == "set_state":
         attr, value = request.get("attr"), request.get("value")
         if not isinstance(attr, str) or not attr.isidentifier() or attr.startswith("_"):
             return {"ok": False, "error": "Unknown or private state attribute: " + str(attr)}
-        return _device_request(dev, _APP_BODY, baud, timeout,
+        return _device_request(dev, _APP_BODY, baud, timeout, settle_ms,
                                CALL="app_control.set_state(app, %r, %r)" % (attr, value))
     if action == "touch":
         points = _points(request.get("points"))
         if points is None:
             return {"ok": False, "error": "points must be a non-empty list of [x, y, ms] integers"}
-        return _device_request(dev, _TOUCH_POINTS_BODY, baud, timeout, POINTS=repr(points))
+        return _device_request(dev, _TOUCH_POINTS_BODY, baud, timeout, settle_ms, POINTS=repr(points))
     x, y = request.get("x"), request.get("y")
     if action in ("find", "click") and (x is not None or y is not None):
         if not (_is_int(x) and _is_int(y)) or request.get("text") is not None or request.get("path") is not None:
             return {"ok": False, "error": "Provide exactly one selector: text, path, or integer x+y"}
-        body = _TOUCH_TAP_BODY if action == "click" else _TOUCH_FIND_BODY
-        return _device_request(dev, body, baud, timeout, X=str(x), Y=str(y))
+        if action == "click":
+            return _device_request(dev, _TOUCH_TAP_BODY, baud, timeout, settle_ms, X=str(x), Y=str(y))
+        return _device_request(dev, _TOUCH_FIND_BODY, baud, timeout, X=str(x), Y=str(y))
 
     layer = request.get("layer", "screen")
     if layer not in ("screen", "top"):
@@ -594,7 +613,7 @@ def _generic_control_request(dev, request, baud, timeout):
         if error:
             return {"ok": False, "error": error}
         result = _device_request(
-            dev, _TOUCH_AIM_BODY, baud, timeout,
+            dev, _TOUCH_AIM_BODY, baud, timeout, settle_ms,
             ROOT=_root_expr(layer), PATH=repr(widget["path"]),
         )
         if result.get("ok"):

@@ -226,6 +226,7 @@ def capabilities():
             "find": True,
             "click": ["text", "path", "coordinates"],
             "touch": True,
+            "wait": True,
             "write_text": ["path", "textarea_index"],
             "layers": ["screen", "top"],
         },
@@ -234,7 +235,24 @@ def capabilities():
 
 
 def handle(request):
-    """Handle a simulator JSON-compatible control request."""
+    """Handle a control request; replies of visible changes carry a settle timeout."""
+    result = _dispatch(request)
+    if result.get("ok") and request.get("action") in SETTLING_ACTIONS:
+        result["_settle_ms"] = _settle_timeout(request)
+    return result
+
+
+SETTLING_ACTIONS = ("click", "touch", "navigate", "set_state", "wait")
+
+
+def _settle_timeout(request):
+    timeout = request.get("timeout_ms", touch.SETTLE_TIMEOUT_MS)
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout < 0:
+        return touch.SETTLE_TIMEOUT_MS
+    return timeout
+
+
+def _dispatch(request):
     action = request.get("action")
     layer = request.get("layer", "screen")
 
@@ -265,6 +283,8 @@ def handle(request):
         )
     if action == "touch":
         return play(request.get("points"))
+    if action == "wait":
+        return {"ok": True}
     if action == "get_state":
         return get_state()
     if action == "navigate":

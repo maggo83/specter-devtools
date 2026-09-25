@@ -8,6 +8,35 @@ import lvgl as lv
 import utime
 
 TAP_MS = 50
+# Settled = no LVGL animation for two ~30 ms refresh periods, so the last frame is drawn.
+QUIET_MS = 70
+SETTLE_TIMEOUT_MS = 3000
+
+
+class Settle:
+    """Track when the UI stops animating; poll done() until True."""
+
+    def __init__(self, timeout_ms=SETTLE_TIMEOUT_MS):
+        self._start = utime.ticks_ms()
+        self._quiet_since = None
+        self._timeout_ms = timeout_ms
+        self.timed_out = False
+
+    def done(self):
+        now = utime.ticks_ms()
+        if lv.anim_count_running():
+            self._quiet_since = None
+        elif self._quiet_since is None:
+            self._quiet_since = now
+        elif utime.ticks_diff(now, self._quiet_since) >= QUIET_MS:
+            return True
+        if utime.ticks_diff(now, self._start) >= self._timeout_ms:
+            self.timed_out = True
+            return True
+        return False
+
+    def elapsed_ms(self):
+        return utime.ticks_diff(utime.ticks_ms(), self._start)
 
 
 class VirtualPointer:

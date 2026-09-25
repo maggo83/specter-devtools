@@ -59,6 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
         layer_command = commands.add_parser(name, help=help_text)
         layer_command.add_argument("--layer", choices=LAYERS, default="screen")
     commands.add_parser("state", help="Show MockUI application state")
+    wait = commands.add_parser("wait", help="Wait until the UI has stopped animating")
+    wait.add_argument("--timeout-ms", type=int, default=3000)
     goto = commands.add_parser("goto", help="Open a MockUI menu by id")
     goto.add_argument("menu_id")
     commands.add_parser("back", help="Go back one MockUI menu")
@@ -70,7 +72,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     explore_parser.add_argument("folder")
     explore_parser.add_argument("--max-depth", type=int, default=5)
-    explore_parser.add_argument("--settle", type=float, default=1.0, help="Seconds to wait before each capture")
     screenshot = commands.add_parser("screenshot", help="Save the visible framebuffer as PNG")
     screenshot.add_argument("output")
     capture_parser = commands.add_parser("capture", help="Save screenshot, tree, and labels")
@@ -99,6 +100,8 @@ def _shortcut_request(args: argparse.Namespace) -> dict:
         return {"action": "tree", "layer": args.layer}
     if args.command == "state":
         return {"action": "get_state"}
+    if args.command == "wait":
+        return {"action": "wait", "timeout_ms": args.timeout_ms}
     if args.command == "goto":
         return {"action": "navigate", "target": args.menu_id}
     if args.command == "back":
@@ -120,7 +123,7 @@ def run(args: argparse.Namespace) -> int:
     elif args.command == "capture":
         result = capture(target, args.folder)
     elif args.command == "explore":
-        result = explore(target, args.folder, args.max_depth, args.settle)
+        result = explore(target, args.folder, args.max_depth)
     elif args.command == "labels":
         result = target.request({"action": "tree", "layer": args.layer})
         if result.get("ok"):

@@ -52,8 +52,8 @@ def test_f469_target_sends_ui_control_through_disco(monkeypatch, tmp_path):
     F469Target(launcher).request({"action": "capabilities"})
     F469Target(launcher).request({"action": "touch", "points": [[1, 1, 0], [1, 1, 4500]]})
 
-    assert commands[0] == [str(launcher.resolve()), "ui", "control", "--timeout", "11", '{"action":"capabilities"}']
-    assert commands[1][3:5] == ["--timeout", "15"]
+    assert commands[0] == [str(launcher.resolve()), "ui", "control", "--timeout", "14", '{"action":"capabilities"}']
+    assert commands[1][3:5] == ["--timeout", "18"]
 
 
 def test_f469_target_rejects_a_missing_launcher(tmp_path):
@@ -189,7 +189,7 @@ class FakeMenuApp:
 def test_explore_captures_every_reachable_menu(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(cli, "make_target", lambda *args, **kwargs: FakeMenuApp())
 
-    assert cli.main(["--target", "simulator", "explore", str(tmp_path), "--settle", "0"]) == 0
+    assert cli.main(["--target", "simulator", "explore", str(tmp_path)]) == 0
     assert json.loads(capsys.readouterr().out)["screens"] == ["main", "settings"]
     assert (tmp_path / "settings" / "labels.txt").read_text() == "Settings Menu\nLanguage\n"
     assert (tmp_path / "main" / "screenshot.png").exists()

@@ -1,7 +1,6 @@
 """Target-independent artifact capture."""
 
 import json
-import time
 from pathlib import Path
 
 from .contract import ControlResponse, ControlTarget, TargetError
@@ -52,7 +51,7 @@ def capture(target: ControlTarget, folder: Path) -> ControlResponse:
     }
 
 
-def explore(target: ControlTarget, folder: Path, max_depth: int = 5, settle: float = 1.0) -> ControlResponse:
+def explore(target: ControlTarget, folder: Path, max_depth: int = 5) -> ControlResponse:
     """Click through every menu reachable from main and capture each screen."""
     folder = Path(folder)
     visited = []
@@ -71,7 +70,7 @@ def explore(target: ControlTarget, folder: Path, max_depth: int = 5, settle: flo
         if depth > max_depth or menu_id in visited:
             return
         visited.append(menu_id)
-        time.sleep(settle)
+        call({"action": "wait"})
         result = capture(target, folder / menu_id)
         if not result.get("ok"):
             raise TargetError(result.get("error", "capture failed"))

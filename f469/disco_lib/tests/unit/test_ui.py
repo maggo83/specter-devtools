@@ -830,3 +830,48 @@ class TestBoardApplicationControl:
         CliRunner().invoke(ui_control, ['{"action":"navigate","target":"$SOURCE_HASH"}'])
 
         assert "app_control.navigate(app, '$SOURCE_HASH')" in scripts[-1]
+
+
+class TestBoardSettle:
+    """Requests that change the UI reply only once LVGL has stopped animating."""
+
+    @staticmethod
+    def _last_script(mock_repl, request_json):
+        scripts = []
+
+        def exec_raw(dev, script, baud, timeout=10):
+            scripts.append(script)
+            if "screen_active') else '8'" in script:
+                return "9"
+            if "_emit(" in script:
+                return '{"path": [], "type": "obj"}\n{"path": [0], "type": "button", "text": "Go"}'
+            return json.dumps({"ok": True, "settled": True})
+        mock_repl.exec_raw.side_effect = exec_raw
+        result = CliRunner().invoke(ui_control, [request_json])
+        return json.loads(result.output), scripts[-1]
+
+    @pytest.mark.parametrize("request_json", [
+        '{"action":"wait"}',
+        '{"action":"click","x":1,"y":2}',
+        '{"action":"click","text":"Go"}',
+        '{"action":"touch","points":[[1,2,0]]}',
+        '{"action":"navigate","target":"main"}',
+        '{"action":"set_state","attr":"is_locked","value":false}',
+    ])
+    def test_changing_requests_wait_for_the_ui_to_settle(self, mock_repl, request_json):
+        result, script = self._last_script(mock_repl, request_json)
+
+        assert result["ok"] is True and result["settled"] is True
+        assert "_devtools_touch.Settle(3000)" in script
+
+    @pytest.mark.parametrize("request_json", ['{"action":"get_state"}', '{"action":"find","x":1,"y":2}'])
+    def test_read_only_requests_do_not_wait(self, mock_repl, request_json):
+        _, script = self._last_script(mock_repl, request_json)
+
+        assert "None is not None" in script
+
+    @pytest.mark.parametrize("timeout, expected", [("500", "500"), ('"x"', "3000"), ("-1", "3000"), ("true", "3000")])
+    def test_wait_timeout_is_validated(self, mock_repl, timeout, expected):
+        _, script = self._last_script(mock_repl, '{"action":"wait","timeout_ms":%s}' % timeout)
+
+        assert "_devtools_touch.Settle(%s)" % expected in script
