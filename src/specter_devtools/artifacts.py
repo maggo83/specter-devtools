@@ -5,8 +5,10 @@ from pathlib import Path
 
 from .contract import ControlResponse, ControlTarget, TargetError
 
-_EXPLORE_SKIP = ("eng", "OK", "Cancel", "Back")
-_DISMISS_LABELS = ("Close", "Cancel", "Skip Tour")
+_EXPLORE_SKIP = ("eng", "Back")
+# MockUI translation keys, resolved in the device's current language.
+_SKIP_KEYS = ("COMMON_OK", "COMMON_CANCEL")
+_DISMISS_KEYS = ("MODAL_CLOSE_BTN", "COMMON_CANCEL", "TOUR_SKIP_BTN")
 
 
 def visible_labels(node: dict) -> list[str]:
@@ -65,7 +67,7 @@ def _buttons(node: dict) -> list[dict]:
     return [button for child in node.get("children", []) for button in _buttons(child)]
 
 
-def _close_dialog(target: ControlTarget, top: dict) -> bool:
+def _close_dialog(target: ControlTarget, top: dict, dismiss_labels: set[str]) -> bool:
     """Close stacked dialogs from the topmost down, each by its only button or
     its button with a dismiss label."""
     for _ in range(5):
@@ -73,7 +75,7 @@ def _close_dialog(target: ControlTarget, top: dict) -> bool:
             return True
         buttons = _buttons(top["children"][-1])
         if len(buttons) != 1:
-            buttons = [b for b in buttons if set(visible_labels(b)) & set(_DISMISS_LABELS)]
+            buttons = [b for b in buttons if set(visible_labels(b)) & dismiss_labels]
         if len(buttons) != 1:
             return False
         target.request({"action": "click", "path": buttons[0]["path"], "layer": "top"})
@@ -112,7 +114,7 @@ def explore(target: ControlTarget, folder: Path, max_depth: int = 5) -> ControlR
             return
         snapshot(name, "top")
         dialogs.append(name)
-        if not _close_dialog(target, top):
+        if not _close_dialog(target, top, dismiss_labels):
             raise TargetError("Cannot close the dialog captured in " + str(folder / name))
 
     def visit(depth):
@@ -122,7 +124,7 @@ def explore(target: ControlTarget, folder: Path, max_depth: int = 5) -> ControlR
         visited.append(menu_id)
         tree = snapshot(menu_id)
         for text in visible_labels(tree["root"]):
-            if len(text) <= 2 or text.isdigit() or text in _EXPLORE_SKIP or text.endswith(":"):
+            if len(text) <= 2 or text.isdigit() or text in skip_labels or text.endswith(":"):
                 continue
             if not target.request({"action": "click", "text": text}).get("ok"):
                 continue
@@ -134,6 +136,9 @@ def explore(target: ControlTarget, folder: Path, max_depth: int = 5) -> ControlR
             if current_menu() != menu_id:
                 call({"action": "navigate", "target": menu_id})
 
+    texts = call({"action": "translate", "keys": sorted(set(_SKIP_KEYS + _DISMISS_KEYS))})["texts"]
+    skip_labels = set(_EXPLORE_SKIP) | {texts[key] for key in _SKIP_KEYS}
+    dismiss_labels = {texts[key] for key in _DISMISS_KEYS}
     call({"action": "navigate", "target": "main"})
     dismiss("startup")
     visit(0)

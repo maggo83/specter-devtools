@@ -217,6 +217,13 @@ def set_state(attr, value):
     return app_control.set_state(_application, attr, value)
 
 
+def translate(keys):
+    """Return MockUI texts for translation keys in the current language."""
+    if _application is None:
+        return {"ok": False, "error": "Application control is unavailable"}
+    return app_control.translate(_application, keys)
+
+
 def capabilities():
     """Describe simulator and application control capabilities."""
     return {
@@ -291,6 +298,8 @@ def _dispatch(request):
         return navigate(request.get("target"))
     if action == "set_state":
         return set_state(request.get("attr"), request.get("value"))
+    if action == "translate":
+        return translate(request.get("keys"))
     if action == "capabilities":
         return capabilities()
     return {"ok": False, "error": "Unknown action: " + str(action)}

@@ -28,6 +28,7 @@ specter-devtools --target f469 capture /tmp/board-capture
 | `get_state` | none | MockUI device and navigation state. |
 | `navigate` | menu `target` or `back` | Updated MockUI state. |
 | `set_state` | public `attr`, JSON `value` | State update and redraw. |
+| `translate` | `keys`: list of MockUI translation keys | `texts`: each key's text in the current UI language. |
 | `wait` | optional `timeout_ms` | Returns once the UI has settled (see below). |
 
 Tree paths are zero-based integer arrays such as `[0, 1, 2]`, valid only for the current snapshot; navigation, animation, or rebuilds can change them. Prefer unique text; use paths for icon-only controls.
@@ -49,7 +50,7 @@ The device-side code is `simulator/sim_control/touch.py`. The simulator freezes 
 Target differences, discoverable through `capabilities`:
 
 - Both targets support text, path, and coordinate selectors, and `touch`.
-- Application actions (`get_state`, `navigate`, `set_state`) need MockUI: both targets run the shared `simulator/sim_control/app_control.py` against its `SpecterGui`. On the F469 that is the `scr` object MockUI's `main.py` leaves in the REPL; `capabilities` reports `application: false` without it. Navigation and state changes run with LVGL timers paused, because on the board they run outside LVGL's update.
+- Application actions (`get_state`, `navigate`, `set_state`, `translate`) need MockUI: both targets run the shared `simulator/sim_control/app_control.py` against its `SpecterGui`. On the F469 that is the `scr` object MockUI's `main.py` leaves in the REPL; `capabilities` reports `application: false` without it. Navigation and state changes run with LVGL timers paused, because on the board they run outside LVGL's update.
 
 ## Transports
 
@@ -64,4 +65,4 @@ After every state-changing input, capture a screenshot and treat it as the sourc
 
 ## Explore
 
-`explore` starts at `main` and taps every label on each screen, capturing every menu it reaches. When a tap opens a dialog on the `top` layer, it captures the dialog as `<menu>__<label>` and closes it: by its only button, or by the button labelled `Close`, `Cancel`, or `Skip Tour`. Stacked dialogs are closed from the topmost down. If no such button exists, `explore` stops with an error rather than guess. It also taps action buttons such as `Create`, so it can change device state; run it on test data only.
+`explore` starts at `main` and taps every label on each screen, capturing every menu it reaches. When a tap opens a dialog on the `top` layer, it captures the dialog as `<menu>__<label>` and closes it: by its only button, or by the button whose label is the current language's text for `MODAL_CLOSE_BTN`, `COMMON_CANCEL`, or `TOUR_SKIP_BTN` (looked up with `translate`). Stacked dialogs are closed from the topmost down. If no such button exists, `explore` stops with an error rather than guess. It also taps action buttons such as `Create`, so it changes device state; it is meant for developer devices and the simulator.

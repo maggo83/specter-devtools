@@ -801,6 +801,7 @@ class TestBoardApplicationControl:
         ('{"action":"navigate","target":"back"}', "app_control.navigate(app, 'back')"),
         ('{"action":"set_state","attr":"is_locked","value":false}',
          "app_control.set_state(app, 'is_locked', False)"),
+        ('{"action":"translate","keys":["COMMON_OK"]}', "app_control.translate(app, ['COMMON_OK'])"),
     ])
     def test_actions_call_the_shared_module_with_the_mockui_object(self, mock_repl, request_json, call):
         scripts = self._requests(mock_repl, {"ok": True})
@@ -815,6 +816,7 @@ class TestBoardApplicationControl:
         '{"action":"set_state","attr":"_hidden","value":1}',
         '{"action":"set_state","attr":"x; import os","value":1}',
         '{"action":"navigate","target":3}',
+        '{"action":"translate","keys":["x\')"]}',
     ])
     def test_invalid_requests_never_reach_the_board(self, mock_repl, request_json):
         scripts = self._requests(mock_repl, {"ok": True})

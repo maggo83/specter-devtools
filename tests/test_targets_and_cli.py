@@ -169,6 +169,7 @@ class FakeMenuApp:
     MENUS = {"main": ["Main Menu", "Settings", "Load File", "OK"], "settings": ["Settings Menu", "Language"]}
     LINKS = {"Settings": "settings"}
     DIALOGS = {"Load File": ("Close",)}
+    TEXTS = {"COMMON_OK": "OK", "COMMON_CANCEL": "Cancel", "TOUR_SKIP_BTN": "Skip Tour"}
 
     def __init__(self, startup=(), stacked=1):
         self.history = ["main"]
@@ -182,6 +183,8 @@ class FakeMenuApp:
             return {"ok": True, "ui": {"current_menu_id": self.history[-1]}}
         if action == "wait":
             return {"ok": True, "settled": True}
+        if action == "translate":
+            return {"ok": True, "texts": {key: self.TEXTS.get(key, "[UNKNOWN_KEY]") for key in request["keys"]}}
         if action == "navigate":
             if request["target"] != "back":
                 self.history.append(request["target"])
@@ -191,7 +194,7 @@ class FakeMenuApp:
         if action == "click" and request.get("layer") == "top":
             overlay, index = request["path"][:2]
             assert overlay == len(self.top) - 1, "only the topmost dialog can be tapped"
-            if self.top[overlay]["children"][index]["children"][0]["text"] in ("Close", "Skip Tour"):
+            if self.top[overlay]["children"][index]["children"][0]["text"] in ("Close", self.TEXTS["TOUR_SKIP_BTN"]):
                 self.top.pop()
             return {"ok": True}
         if action == "click":
@@ -246,6 +249,14 @@ def test_explore_closes_stacked_startup_dialogs_by_their_dismiss_buttons(tmp_pat
 
     assert result["dialogs"][0] == "startup"
     assert result["screens"] == ["main", "settings"]
+
+
+def test_explore_finds_dismiss_buttons_in_the_devices_language(tmp_path):
+    app = FakeMenuApp(startup=("<", "Tour überspringen", ">"))
+    app.TEXTS = {"COMMON_OK": "OK", "COMMON_CANCEL": "Abbrechen", "TOUR_SKIP_BTN": "Tour überspringen"}
+
+    assert explore(app, tmp_path)["dialogs"][0] == "startup"
+    assert app.requests[0] == {"action": "translate", "keys": ["COMMON_CANCEL", "COMMON_OK", "MODAL_CLOSE_BTN", "TOUR_SKIP_BTN"]}
 
 
 def test_explore_stops_at_a_dialog_it_cannot_close_safely(tmp_path):

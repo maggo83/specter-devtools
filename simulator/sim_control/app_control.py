@@ -88,3 +88,10 @@ def set_state(application, attr, value):
 
     _paused(apply)
     return {"ok": True, "set": {attr: value}}
+
+
+def translate(application, keys):
+    """Return the texts of translation keys in the current UI language."""
+    if not isinstance(keys, list) or not all(isinstance(key, str) for key in keys):
+        return {"ok": False, "error": "keys must be a list of translation keys"}
+    return {"ok": True, "texts": {key: application.i18n.t(key) for key in keys}}

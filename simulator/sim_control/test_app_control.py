@@ -44,6 +44,8 @@ class Application:
     def refresh_ui(self):
         self.calls.append(("refresh_ui", None, list(self.timers)))
 
+    i18n = types.SimpleNamespace(t={"COMMON_CANCEL": "Abbrechen"}.get)
+
 
 @pytest.fixture
 def app(monkeypatch):
@@ -83,6 +85,11 @@ def test_set_state_rebuilds_with_timers_paused(app):
     assert [call[:2] for call in app.calls] == [("rebuild_slot", "app_screen"), ("refresh_ui", None)]
     assert all(call[2] == [False] for call in app.calls)
     assert app.timers == [False, True]
+
+
+def test_translate_uses_the_apps_current_language(app):
+    assert app_control.translate(app, ["COMMON_CANCEL"]) == {"ok": True, "texts": {"COMMON_CANCEL": "Abbrechen"}}
+    assert app_control.translate(app, "COMMON_CANCEL")["ok"] is False
 
 
 @pytest.mark.parametrize("attr", ["_hidden", "missing", "", 3, None])

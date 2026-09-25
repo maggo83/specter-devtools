@@ -582,6 +582,11 @@ def _generic_control_request(dev, request, baud, timeout):
             return {"ok": False, "error": "Unknown or private state attribute: " + str(attr)}
         return _device_request(dev, _APP_BODY, baud, timeout, settle_ms,
                                CALL="app_control.set_state(app, %r, %r)" % (attr, value))
+    if action == "translate":
+        keys = request.get("keys")
+        if not isinstance(keys, list) or not all(isinstance(key, str) and key.isidentifier() for key in keys):
+            return {"ok": False, "error": "keys must be a list of translation keys"}
+        return _device_request(dev, _APP_BODY, baud, timeout, CALL="app_control.translate(app, %r)" % keys)
     if action == "touch":
         points = _points(request.get("points"))
         if points is None:
