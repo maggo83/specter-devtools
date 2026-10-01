@@ -652,17 +652,19 @@ def _generic_control_request(dev, request, baud, timeout):
 
 @click.group()
 def ui():
-    """LVGL remote control.
+    """LVGL remote control. Requires LVGL 9+ firmware.
 
-    Low-level commands to inspect and interact with the LVGL widget tree
-    running on the board. Requires LVGL 9+ firmware.
+    `control` serves the shared control contract that specter-devtools uses;
+    `screen`, `click`, and `write` are older direct helpers.
 
     \b
     Commands:
-      disco ui screen           # dump widget tree
-      disco ui screen --json    # dump as JSON
-      disco ui click "1"        # click widget with label "1"
-      disco ui write "hello"    # set text on a textarea
+      disco ui control '{"action":"tree"}'  # control-contract request
+      disco ui screenshot shot.png          # framebuffer as PNG
+      disco ui screen                       # dump widget tree
+      disco ui screen --json                # dump as JSON
+      disco ui click "1"                    # click widget with label "1"
+      disco ui write "hello"                # set text on a textarea
     """
     pass
 
@@ -749,6 +751,9 @@ def ui_click(text: str, index: str, layer: str, timeout: int):
     By default, searches depth-first for a widget whose label text matches.
     With --index, navigates the tree by child indices (dot-separated).
     Use --layer top to target overlay widgets (e.g. modal dialogs, tour).
+
+    Sends LVGL's CLICKED event to the widget directly; `disco ui control`
+    taps through the virtual pointer like a finger instead.
 
     \b
     Examples:

@@ -5,8 +5,9 @@ import click
 QUICKSTART_TEXT = """\
 # disco - STM32F469 Discovery Board Tool
 
-Use `disco` for ALL interactions with the STM32F469-Discovery board.
-Handles OpenOCD, JTAG debugging, flash programming, and MicroPython REPL.
+Use `disco` for hardware interactions with the STM32F469-Discovery board:
+OpenOCD, JTAG debugging, flash programming, power, and MicroPython REPL.
+For UI control, use `specter-devtools --target f469`; it calls `disco ui control`.
 
 ## Command Tree
 
@@ -46,10 +47,19 @@ disco
 │   ├── info        # Show flash bank info
 │   ├── analyze     # Analyze firmware layout
 │   ├── identify    # Identify build type
+│   ├── rdp         # Show read protection level
+│   ├── lock        # Set RDP level 1 (dangerous!)
+│   ├── unlock      # RDP level 1 -> 0, mass erase (dangerous!)
 │   └── fingerprint # Firmware fingerprints
 │       ├── create  # Create new fingerprint
 │       ├── update  # Update existing fingerprint
 │       └── test    # Test against fingerprint
+│
+├── power           # USB power via YKUSH hub
+│   ├── status      # Show devices and port states
+│   ├── on          # Power ports on
+│   ├── off         # Power ports off
+│   └── cycle       # Power cycle ports
 │
 ├── serial          # Serial/REPL communication
 │   ├── list        # List serial devices
@@ -58,18 +68,25 @@ disco
 │   ├── test        # Quick serial test
 │   └── boot        # Reset and capture boot output
 │
-└── repl            # MicroPython REPL interaction
-    ├── exec        # Execute Python code
-    ├── info        # Show board info
-    ├── modules     # List available modules
-    ├── help        # Show MicroPython help
-    ├── hello       # Display message on screen
-    ├── import      # Import module, show output
-    ├── reset       # Soft-reset (Ctrl-D)
-    ├── ls          # List files
-    ├── cat         # Print file contents
-    ├── cp          # Copy file to/from board
-    └── rm          # Remove file
+├── repl            # MicroPython REPL interaction
+│   ├── exec        # Execute Python code
+│   ├── info        # Show board info
+│   ├── modules     # List available modules
+│   ├── help        # Show MicroPython help
+│   ├── hello       # Display message on screen
+│   ├── import      # Import module, show output
+│   ├── reset       # Soft-reset (Ctrl-D)
+│   ├── ls          # List files
+│   ├── cat         # Print file contents
+│   ├── cp          # Copy file to/from board
+│   └── rm          # Remove file
+│
+└── ui              # LVGL remote control (LVGL 9+)
+    ├── control     # Control-contract request (JSON)
+    ├── screenshot  # Framebuffer as PNG
+    ├── screen      # Dump widget tree
+    ├── click       # Click widget by text or path
+    └── write       # Set textarea text
 ```
 
 ## Quick Start
@@ -97,8 +114,8 @@ disco cpu stack 16    # Inspect stack
 
 **Flash firmware:**
 ```
-disco flash program firmware.bin --address 0x08000000
-disco flash verify firmware.bin && disco cpu reset
+disco flash program firmware.bin   # Address auto-detected; verifies and resets
+disco flash verify firmware.bin    # Internal filesystem is reported separately
 ```
 
 **Fingerprint testing (CI/regression):**
@@ -125,23 +142,6 @@ disco repl cp local.py :/main.py
 | Firmware    | 0x08020000 | 1.75M |
 | RAM         | 0x20000000 | 320K  |
 | SDRAM       | 0xC0000000 | 16M   |
-
-## Beads Workflow
-
-When you discover useful board interactions or debug techniques:
-```
-bd create "disco: <brief discovery description>"
-# ... document commands and output ...
-bd close
-```
-
-Examples worth capturing:
-- New debug techniques for specific fault types
-- Workarounds for hardware quirks
-- Useful memory inspection patterns
-- Firmware identification methods
-
-This builds institutional knowledge about the board.
 """
 
 

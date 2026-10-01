@@ -27,9 +27,10 @@ def cli():
     Top-level commands:
 
     \b
-      doctor  - Automated diagnostics with logging
-      check   - Run full board diagnostics
-      cables  - Detect connected USB cables
+      doctor     - Automated diagnostics with logging
+      check      - Run full board diagnostics
+      cables     - Detect connected USB cables
+      quickstart - Print AI agent context for disco
     """
     pass
 

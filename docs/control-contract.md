@@ -55,7 +55,7 @@ Target differences, discoverable through `capabilities`:
 ## Transports
 
 - `simulator`: `simulator/sim_control` is frozen into the Unix simulator only and serves `{"action":"control","request":...}` over TCP port 9876 when the simulator starts with `--control`. Screenshots use f469-disco's `SDL.screenshot`, which has SDL convert the render target to a raw 16-bit RGB565 file (host byte order). Correct colors need its fix (branch `fix/sdl-screenshot-rgba32` of `maggo83/f469-disco_disco_tool`) until [miketlk/f469-disco#1](https://github.com/miketlk/f469-disco/pull/1) and its follow-up [#3](https://github.com/miketlk/f469-disco/pull/3) are merged.
-- `f469`: `f469/disco ui control` injects short generic LVGL scripts through the raw MicroPython REPL; only the touch module stays in RAM until the next reset. Screenshots read the display framebuffer at `0xC0000000` (480×800, ARGB8888, the LTDC layer format) through OpenOCD while the CPU is briefly halted.
+- `f469`: `f469/disco ui control` injects short generic LVGL scripts through the raw MicroPython REPL; only the `touch` and `app_control` modules stay in RAM until the next reset. Screenshots read the display framebuffer at `0xC0000000` (480×800, ARGB8888, the LTDC layer format) through OpenOCD while the CPU is briefly halted.
 
 The client converts both to PNG with the same response shape; simulator PNGs carry only 16-bit color precision.
 

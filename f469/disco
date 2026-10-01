@@ -11,7 +11,7 @@ _venv_python = _script_dir.parent / ".venv" / "bin" / "python"
 if _venv_python.exists() and sys.prefix == sys.base_prefix:
     os.execv(str(_venv_python), [str(_venv_python)] + sys.argv)
 
-# Add scripts directory to path for disco_lib import
+# Make disco_lib importable
 sys.path.insert(0, str(_script_dir))
 
 from disco_lib.cli import cli
