@@ -86,14 +86,18 @@ def exec_code(dev: str, code: str, baud: int = BAUD_RATE, timeout: float = 3.0) 
 def hard_reset(dev: str, baud: int = BAUD_RATE, timeout: float = 3.0) -> None:
     """Reset the board like its reset button, via machine.reset() on the REPL."""
     command = b"import machine; machine.reset()"
+    reset_sent = False
     try:
         with pyserial.Serial(dev, baud, timeout=timeout) as ser:
             ser.write(b"\x03\x02")  # stop running code, leave a raw REPL
             ser.read_until(b">>> ")
             ser.write(command + b"\r\n")
+            reset_sent = True
             ser.read_until(command)
     except (pyserial.SerialException, OSError):
-        pass  # USB disconnects as the board resets
+        if not reset_sent:
+            raise
+        # USB disconnects as the board resets after the command is sent.
     time.sleep(1)  # let the port go away before anyone waits for the prompt
 
 
