@@ -75,7 +75,7 @@ disco
 │   ├── help        # Show MicroPython help
 │   ├── hello       # Display message on screen
 │   ├── import      # Import module, show output
-│   ├── reset       # Soft-reset (Ctrl-D)
+│   ├── reset       # Hard reset, waits for the REPL
 │   ├── ls          # List files
 │   ├── cat         # Print file contents
 │   ├── cp          # Copy file to/from board
@@ -130,7 +130,7 @@ disco flash fingerprint test fp.yaml --static-only  # File-only (no hardware)
 **MicroPython interaction:**
 ```
 disco repl exec "print('hello')"
-disco repl reset; disco repl wait   # wait until the board answers again
+disco repl reset                    # hard reset; returns once the REPL answers
 disco repl ls / && disco repl cat /main.py
 disco repl cp local.py :/main.py
 ```

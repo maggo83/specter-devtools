@@ -24,7 +24,8 @@ def repl():
       disco repl exec "help()" --timeout 5
       disco repl info
       disco repl modules
-      disco repl wait                       # after a reset or flash
+      disco repl reset                      # hard reset, waits for the REPL
+      disco repl wait                       # after flashing
       disco repl hello "Hi!"
 
     \b
@@ -107,15 +108,16 @@ def repl_help():
 
 
 @repl.command("reset")
-def repl_reset():
-    """Soft-reset the board (Ctrl-D)."""
-    dev = _ser.require_device()
-    try:
-        output = repl_backend.soft_reset(dev, _ser.baud, 3)
-        click.echo(output)
-        click.secho("Soft reset sent", fg="green")
-    except pyserial.SerialException as e:
-        raise click.ClickException(f"Serial error: {e}")
+@click.option("--timeout", "-t", default=60, type=int, help="Seconds to wait for the REPL")
+def repl_reset(timeout: int):
+    """Reset the board and wait until its REPL answers again.
+
+    \b
+    A hard reset (machine.reset(), like the reset button). There is no soft
+    reset: it makes MockUI's display.init() fail.
+    """
+    repl_backend.hard_reset(_ser.require_device(), _ser.baud)
+    _wait(timeout)
 
 
 @repl.command("wait")
@@ -124,10 +126,14 @@ def repl_wait(timeout: int):
     """Wait until the board answers on its REPL.
 
     \b
-    Use after a reset or flash: waits for the USB serial port to come back
-    and for the >>> prompt, without interrupting a booting main.py.
-      disco repl reset; disco repl wait
+    Use after flashing: waits for the USB serial port to come back and for
+    the >>> prompt, without interrupting a booting main.py.
+      disco flash program firmware.bin && disco repl wait
     """
+    _wait(timeout)
+
+
+def _wait(timeout: int):
     try:
         dev = repl_backend.wait_for_prompt(_ser.auto_detect, _ser.baud, timeout)
     except TimeoutError as e:

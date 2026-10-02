@@ -3,7 +3,7 @@
 The repl module handles MicroPython REPL communication:
   - filter_repl_output: Clean up raw serial output to extract results
   - exec_code: Send code and get filtered response
-  - soft_reset: Send Ctrl-D reset sequence
+  - hard_reset: machine.reset() over the REPL
 
 The key testable logic is in filter_repl_output, which must handle
 the messy reality of serial REPL output (echoes, prompts, \r\n, etc).
@@ -260,3 +260,86 @@ class TestWaitForPrompt:
 
         assert result.exit_code == 1
         assert "No REPL prompt within 1 s" in result.output
+
+
+class TestNoSoftReset:
+    """The board is never soft-reset: MockUI's display.init() fails after one."""
+
+    def test_hard_reset_runs_machine_reset_and_survives_the_disconnect(self, monkeypatch):
+        import serial
+
+        from disco_lib import repl
+
+        written = []
+
+        class DisconnectingSerial:
+            def __init__(self, dev, baud, timeout):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def write(self, data):
+                written.append(data)
+
+            def read_until(self, expected):
+                if expected != b">>> ":
+                    raise serial.SerialException("device disconnected")
+                return b"\r\n>>> "
+
+        monkeypatch.setattr(repl.pyserial, "Serial", DisconnectingSerial)
+        monkeypatch.setattr(repl.time, "sleep", lambda s: None)
+
+        repl.hard_reset("/dev/fake")
+
+        assert written == [b"\x03\x02", b"import machine; machine.reset()\r\n"]
+        assert b"\x04" not in b"".join(written)
+
+    def test_file_commands_enter_the_raw_repl_without_a_soft_reset(self, monkeypatch):
+        import mpremote.transport_serial
+
+        from disco_lib import repl
+
+        calls = []
+
+        class FakeTransport:
+            def __init__(self, dev, baud):
+                pass
+
+            def enter_raw_repl(self, soft_reset=True):
+                calls.append(soft_reset)
+
+            def exit_raw_repl(self):
+                pass
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(mpremote.transport_serial, "SerialTransport", FakeTransport)
+        with repl.mpremote_transport("/dev/fake"):
+            pass
+
+        assert calls == [False]
+
+    def test_reset_command_resets_then_waits(self, monkeypatch):
+        import importlib
+
+        from click.testing import CliRunner
+
+        commands = importlib.import_module("disco_lib.commands.repl")
+        steps = []
+        monkeypatch.setattr(commands._ser, "require_device", lambda: "/dev/fake")
+        monkeypatch.setattr(commands.repl_backend, "hard_reset", lambda dev, baud: steps.append("reset"))
+
+        def wait(find, baud, timeout):
+            steps.append(("wait", timeout))
+            raise TimeoutError(f"No REPL prompt within {timeout} s")
+
+        monkeypatch.setattr(commands.repl_backend, "wait_for_prompt", wait)
+        result = CliRunner().invoke(commands.repl, ["reset", "--timeout", "5"])
+
+        assert steps == ["reset", ("wait", 5)]
+        assert result.exit_code == 1 and "No REPL prompt within 5 s" in result.output

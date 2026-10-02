@@ -30,6 +30,7 @@ Device code in `simulator/sim_control/`:
 - `f469/disco_lib/commands/` calls the `cpu`, `memory`, and `flash` modules; only `commands/ocd.py` may call `ocd.send()` (enforced by `test_architecture.py`).
 - RDP level 2 permanently disables debugging; `disco` intentionally cannot set it. Keep it that way.
 - The simulator binary and its build stay in the product repository.
+- Never soft-reset the board (Ctrl-D, or mpremote's raw REPL with `soft_reset=True`): MockUI's `display.init()` then fails and the board has no UI until a hard reset. `repl reset` does a hard reset.
 - `f469/` and `simulator/` contain MIT-licensed code from f469-disco and specter-playground; keep [f469/LICENSE](f469/LICENSE) and [simulator/LICENSE](simulator/LICENSE).
 
 ## Hardware Safety
@@ -37,7 +38,7 @@ Device code in `simulator/sim_control/`:
 Use the simulator and developer boards only, never a device holding real funds. Ask the user before:
 
 - `board flash` erase, program, lock, or unlock, and anything else that writes flash or option bytes;
-- `board power` on, off, or cycle, and `board cpu reset`;
+- `board power` on, off, or cycle, `board cpu reset`, and `board repl reset`;
 - `explore` on a board: it taps action buttons such as *Create* and changes device state.
 
 Never answer `disco`'s confirmation prompts on the user's behalf. Reading is fine: screenshots, trees, `flash analyze`/`verify`/`read`, `mem read`, `doctor`.
