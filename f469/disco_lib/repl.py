@@ -9,11 +9,12 @@ from . import BAUD_RATE
 
 
 @contextmanager
-def mpremote_transport(dev: str, baud: int = BAUD_RATE, soft_reset: bool = True):
+def mpremote_transport(dev: str, baud: int = BAUD_RATE):
     """Context manager for mpremote SerialTransport."""
     from mpremote.transport_serial import SerialTransport
     transport = SerialTransport(dev, baud)
-    transport.enter_raw_repl(soft_reset=soft_reset)
+    # A soft reset makes MockUI's display.init() fail, leaving the board without a UI.
+    transport.enter_raw_repl(soft_reset=False)
     try:
         yield transport
     finally:
@@ -56,7 +57,7 @@ def exec_raw(dev: str, code: str, baud: int = BAUD_RATE, timeout: float = 5.0) -
     Unlike exec_code() which uses the friendly REPL (single-line only),
     this uses mpremote's raw REPL protocol to send multi-line scripts.
     """
-    with mpremote_transport(dev, baud, soft_reset=False) as transport:
+    with mpremote_transport(dev, baud) as transport:
         transport.exec_raw_no_follow(code)
         stdout, stderr = transport.follow(timeout=timeout)
         stdout = stdout.decode("utf-8", errors="replace") if isinstance(stdout, bytes) else stdout
@@ -82,12 +83,41 @@ def exec_code(dev: str, code: str, baud: int = BAUD_RATE, timeout: float = 3.0) 
         return filter_repl_output(text, code)
 
 
-def soft_reset(dev: str, baud: int = BAUD_RATE, timeout: float = 3.0) -> str:
-    """Send soft reset (Ctrl-D) and return output."""
-    with pyserial.Serial(dev, baud, timeout=timeout) as ser:
-        ser.write(b"\x03")  # Ctrl-C first
-        time.sleep(0.1)
-        ser.write(b"\x04")  # Ctrl-D
-        time.sleep(1)
-        data = ser.read(4096)
-        return data.decode("utf-8", errors="replace")
+def hard_reset(dev: str, baud: int = BAUD_RATE, timeout: float = 3.0) -> None:
+    """Reset the board like its reset button, via machine.reset() on the REPL."""
+    command = b"import machine; machine.reset()"
+    reset_sent = False
+    try:
+        with pyserial.Serial(dev, baud, timeout=timeout) as ser:
+            ser.write(b"\x03\x02")  # stop running code, leave a raw REPL
+            ser.read_until(b">>> ")
+            ser.write(command + b"\r\n")
+            reset_sent = True
+            ser.read_until(command)
+    except (pyserial.SerialException, OSError):
+        if not reset_sent:
+            raise
+        # USB disconnects as the board resets after the command is sent.
+    time.sleep(1)  # let the port go away before anyone waits for the prompt
+
+
+def wait_for_prompt(find_device, baud: int = BAUD_RATE, timeout: float = 60.0, poll: float = 1.0) -> str:
+    """Wait until the serial port exists and the REPL answers with a prompt.
+
+    Returns the device path; raises TimeoutError.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        dev = find_device()
+        if dev:
+            try:
+                with pyserial.Serial(dev, baud, timeout=poll) as ser:
+                    ser.reset_input_buffer()
+                    # Ctrl-B, not Ctrl-C: leaves a raw REPL and never interrupts a booting main.py.
+                    ser.write(b"\x02")
+                    if ser.read_until(b">>> ").endswith(b">>> "):
+                        return dev
+            except (pyserial.SerialException, OSError):
+                pass  # the port disappears while the board re-enumerates
+        time.sleep(poll)
+    raise TimeoutError(f"No REPL prompt within {timeout:g} s")
