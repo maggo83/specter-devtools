@@ -130,6 +130,7 @@ disco flash fingerprint test fp.yaml --static-only  # File-only (no hardware)
 **MicroPython interaction:**
 ```
 disco repl exec "print('hello')"
+disco repl reset; disco repl wait   # wait until the board answers again
 disco repl ls / && disco repl cat /main.py
 disco repl cp local.py :/main.py
 ```

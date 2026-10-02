@@ -24,6 +24,7 @@ def repl():
       disco repl exec "help()" --timeout 5
       disco repl info
       disco repl modules
+      disco repl wait                       # after a reset or flash
       disco repl hello "Hi!"
 
     \b
@@ -115,6 +116,23 @@ def repl_reset():
         click.secho("Soft reset sent", fg="green")
     except pyserial.SerialException as e:
         raise click.ClickException(f"Serial error: {e}")
+
+
+@repl.command("wait")
+@click.option("--timeout", "-t", default=60, type=int, help="Seconds to wait")
+def repl_wait(timeout: int):
+    """Wait until the board answers on its REPL.
+
+    \b
+    Use after a reset or flash: waits for the USB serial port to come back
+    and for the >>> prompt, without interrupting a booting main.py.
+      disco repl reset; disco repl wait
+    """
+    try:
+        dev = repl_backend.wait_for_prompt(_ser.auto_detect, _ser.baud, timeout)
+    except TimeoutError as e:
+        raise click.ClickException(str(e))
+    click.secho(f"REPL ready on {dev}", fg="green")
 
 
 @repl.command("hello")

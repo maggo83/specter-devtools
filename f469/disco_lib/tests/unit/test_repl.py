@@ -189,3 +189,74 @@ class TestExecCode:
 
         monkeypatch.setattr(repl.pyserial, "Serial", FakeSerial)
         assert repl.exec_code("/dev/fake", "print(6*7)") == "42"
+
+
+class TestWaitForPrompt:
+    """wait_for_prompt waits for the port to return and the REPL to answer."""
+
+    @staticmethod
+    def _serial(monkeypatch, replies):
+        from disco_lib import repl
+
+        written = []
+
+        class FakeSerial:
+            def __init__(self, dev, baud, timeout):
+                reply = replies.pop(0) if len(replies) > 1 else replies[0]
+                if isinstance(reply, Exception):
+                    raise reply
+                self.reply = reply
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def reset_input_buffer(self):
+                pass
+
+            def write(self, data):
+                written.append(data)
+
+            def read_until(self, expected):
+                return self.reply
+
+        monkeypatch.setattr(repl.pyserial, "Serial", FakeSerial)
+        monkeypatch.setattr(repl.time, "sleep", lambda s: None)
+        return repl, written
+
+    def test_waits_for_the_port_and_the_prompt_without_interrupting(self, monkeypatch):
+        import serial
+
+        repl, written = self._serial(monkeypatch, [
+            serial.SerialException("port is re-enumerating"),
+            b"",
+            b"\r\nMicroPython v1.25\r\n>>> ",
+        ])
+        devices = iter([None, "/dev/fake", "/dev/fake", "/dev/fake"])
+
+        assert repl.wait_for_prompt(lambda: next(devices), timeout=5, poll=0) == "/dev/fake"
+        assert written == [b"\x02", b"\x02"]
+
+    def test_times_out_when_the_prompt_never_comes(self, monkeypatch):
+        repl, _ = self._serial(monkeypatch, [b""])
+
+        with pytest.raises(TimeoutError, match="No REPL prompt within 0.05 s"):
+            repl.wait_for_prompt(lambda: "/dev/fake", timeout=0.05, poll=0)
+
+    def test_cli_fails_on_timeout(self, monkeypatch):
+        import importlib
+
+        from click.testing import CliRunner
+
+        repl_commands = importlib.import_module("disco_lib.commands.repl")
+
+        def timeout(*args):
+            raise TimeoutError("No REPL prompt within 1 s")
+
+        monkeypatch.setattr(repl_commands.repl_backend, "wait_for_prompt", timeout)
+        result = CliRunner().invoke(repl_commands.repl, ["wait", "--timeout", "1"])
+
+        assert result.exit_code == 1
+        assert "No REPL prompt within 1 s" in result.output

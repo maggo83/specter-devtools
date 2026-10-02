@@ -91,3 +91,25 @@ def soft_reset(dev: str, baud: int = BAUD_RATE, timeout: float = 3.0) -> str:
         time.sleep(1)
         data = ser.read(4096)
         return data.decode("utf-8", errors="replace")
+
+
+def wait_for_prompt(find_device, baud: int = BAUD_RATE, timeout: float = 60.0, poll: float = 1.0) -> str:
+    """Wait until the serial port exists and the REPL answers with a prompt.
+
+    Returns the device path; raises TimeoutError.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        dev = find_device()
+        if dev:
+            try:
+                with pyserial.Serial(dev, baud, timeout=poll) as ser:
+                    ser.reset_input_buffer()
+                    # Ctrl-B, not Ctrl-C: leaves a raw REPL and never interrupts a booting main.py.
+                    ser.write(b"\x02")
+                    if ser.read_until(b">>> ").endswith(b">>> "):
+                        return dev
+            except (pyserial.SerialException, OSError):
+                pass  # the port disappears while the board re-enumerates
+        time.sleep(poll)
+    raise TimeoutError(f"No REPL prompt within {timeout:g} s")
