@@ -116,8 +116,10 @@ def repl_reset(timeout: int):
     A hard reset (machine.reset(), like the reset button). There is no soft
     reset: it makes MockUI's display.init() fail.
     """
-    repl_backend.hard_reset(_ser.require_device(), _ser.baud)
-    _wait(timeout)
+    dev = _ser.require_device()
+    repl_backend.hard_reset(dev, _ser.baud)
+    # Wait for this board only; its by-id path (USB serial number) survives the reconnect.
+    _wait(timeout, lambda: dev if os.path.exists(dev) else None)
 
 
 @repl.command("wait")
@@ -133,9 +135,9 @@ def repl_wait(timeout: int):
     _wait(timeout)
 
 
-def _wait(timeout: int):
+def _wait(timeout: int, find_device=None):
     try:
-        dev = repl_backend.wait_for_prompt(_ser.auto_detect, _ser.baud, timeout)
+        dev = repl_backend.wait_for_prompt(find_device or _ser.auto_detect, _ser.baud, timeout)
     except TimeoutError as e:
         raise click.ClickException(str(e))
     click.secho(f"REPL ready on {dev}", fg="green")

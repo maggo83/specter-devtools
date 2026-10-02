@@ -343,3 +343,40 @@ class TestNoSoftReset:
 
         assert steps == ["reset", ("wait", 5)]
         assert result.exit_code == 1 and "No REPL prompt within 5 s" in result.output
+
+    def test_reset_waits_for_the_board_it_reset(self, monkeypatch, tmp_path):
+        import importlib
+
+        from click.testing import CliRunner
+
+        commands = importlib.import_module("disco_lib.commands.repl")
+        board = tmp_path / "usb-MicroPython_board_A"
+        board.touch()
+        monkeypatch.setattr(commands._ser, "require_device", lambda: str(board))
+        monkeypatch.setattr(commands._ser, "auto_detect", lambda: "/dev/board_B")
+        monkeypatch.setattr(commands.repl_backend, "hard_reset", lambda dev, baud: board.unlink())
+        seen = []
+
+        def wait(find, baud, timeout):
+            seen.append(find())
+            board.touch()
+            seen.append(find())
+            return seen[-1]
+
+        monkeypatch.setattr(commands.repl_backend, "wait_for_prompt", wait)
+        result = CliRunner().invoke(commands.repl, ["reset"])
+
+        assert result.exit_code == 0
+        assert seen == [None, str(board)]
+
+    def test_hard_reset_reports_errors_before_the_reset_is_sent(self, monkeypatch):
+        import serial
+
+        from disco_lib import repl
+
+        def unavailable(*args, **kwargs):
+            raise serial.SerialException("could not open port")
+
+        monkeypatch.setattr(repl.pyserial, "Serial", unavailable)
+        with pytest.raises(serial.SerialException, match="could not open port"):
+            repl.hard_reset("/dev/fake")
