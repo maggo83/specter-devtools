@@ -853,11 +853,26 @@ def ui_write(text: str, target: int, timeout: int):
 # --- Screenshot support ---
 
 # Framebuffer constants
-_FB_ADDR = 0xC0000000
+_LTDC_LAYER1_CFBAR = 0x400168AC
+_FB_ADDRS = (0xC0000000, 0xC0200000)
 _FB_WIDTH = 480
 _FB_HEIGHT = 800
 _FB_BPP = 4  # ARGB8888
 _FB_SIZE = _FB_WIDTH * _FB_HEIGHT * _FB_BPP  # 1,536,000 bytes
+
+
+def _active_framebuffer_address(ocd) -> int:
+    """Return the framebuffer currently scanned by LTDC layer 1."""
+    output = memory.read_words(ocd, _LTDC_LAYER1_CFBAR, 1)
+    match = re.search(r":\s*([0-9a-fA-F]{8})\b", output)
+    if match is None:
+        raise click.ClickException("Could not read LTDC framebuffer address")
+
+    address = int(match.group(1), 16)
+    if address not in _FB_ADDRS:
+        raise click.ClickException(
+            f"Unexpected LTDC framebuffer address: 0x{address:08x}")
+    return address
 
 
 def _raw_to_png(raw_path: str, png_path: str,
@@ -925,10 +940,11 @@ def ui_screenshot(output: str, timeout: int):
     try:
         ocd = get_ocd()
         with ocd.ensure_running(), cpu_backend.halted(ocd):
-            click.echo(f"Dumping framebuffer (0x{_FB_ADDR:08x}, "
+            fb_addr = _active_framebuffer_address(ocd)
+            click.echo(f"Dumping framebuffer (0x{fb_addr:08x}, "
                        f"{_FB_SIZE:,} bytes)...")
             success = memory.dump_to_file(
-                ocd, tmp_path, _FB_ADDR, _FB_SIZE, timeout=timeout)
+                ocd, tmp_path, fb_addr, _FB_SIZE, timeout=timeout)
             if not success:
                 raise click.ClickException("Failed to dump framebuffer")
 

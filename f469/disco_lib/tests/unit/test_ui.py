@@ -485,6 +485,13 @@ class TestRawToPng:
 class TestScreenshotResumeCPU:
     """ui screenshot must always resume the CPU."""
 
+    @pytest.fixture(autouse=True)
+    def active_framebuffer(self, ocd_mock):
+        ocd_mock.set_response(
+            "mdw 0x400168ac 1",
+            "0x400168ac: c0000000",
+        )
+
     def test_screenshot_resumes_cpu(self, ocd_mock, tmp_path):
         """CPU must be resumed after a successful screenshot."""
         out = str(tmp_path / "shot.png")
@@ -521,6 +528,13 @@ class TestScreenshotResumeCPU:
 class TestScreenshotCommand:
     """Functional tests for the screenshot command."""
 
+    @pytest.fixture(autouse=True)
+    def active_framebuffer(self, ocd_mock):
+        ocd_mock.set_response(
+            "mdw 0x400168ac 1",
+            "0x400168ac: c0200000",
+        )
+
     def test_creates_png_file(self, ocd_mock, tmp_path):
         """Command should create a valid PNG file."""
         out = str(tmp_path / "test.png")
@@ -554,8 +568,23 @@ class TestScreenshotCommand:
             runner.invoke(ui_screenshot, [out])
         mock_dump.assert_called_once()
         args = mock_dump.call_args
-        assert args[0][2] == 0xC0000000  # addr
+        assert args[0][2] == 0xC0200000  # active LTDC framebuffer
         assert args[0][3] == _FB_SIZE    # size
+
+    def test_rejects_unexpected_framebuffer_address(self, ocd_mock, tmp_path):
+        ocd_mock.set_response(
+            "mdw 0x400168ac 1",
+            "0x400168ac: deadbeef",
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            ui_screenshot,
+            [str(tmp_path / "test.png")],
+        )
+
+        assert result.exit_code != 0
+        assert "Unexpected LTDC framebuffer address" in result.output
 
     def test_custom_timeout(self, ocd_mock, tmp_path):
         """--timeout flag should be passed to dump_to_file."""
@@ -616,6 +645,10 @@ class TestScreenshotCommand:
     def test_halts_cpu_during_dump(self, ocd_mock_raw, tmp_path):
         """CPU should be halted when dump_to_file is called."""
         halted_during_dump = []
+        ocd_mock_raw.set_response(
+            "mdw 0x400168ac 1",
+            "0x400168ac: c0200000",
+        )
 
         def _check_halted(ocd, filepath, addr, size, timeout=60):
             halted_during_dump.append(ocd_mock_raw.halted)
