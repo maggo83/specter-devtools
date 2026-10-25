@@ -854,11 +854,11 @@ def ui_write(text: str, target: int, timeout: int):
 
 # Framebuffer constants
 _LTDC_LAYER1_CFBAR = 0x400168AC
-_FB_ADDRS = (0xC0000000, 0xC0200000)
+_FB_ADDRS = (0xC0000000, 0xC0200000, 0xC0400000)
 _FB_WIDTH = 480
 _FB_HEIGHT = 800
-_FB_BPP = 4  # ARGB8888
-_FB_SIZE = _FB_WIDTH * _FB_HEIGHT * _FB_BPP  # 1,536,000 bytes
+_FB_BPP = 2  # RGB565
+_FB_SIZE = _FB_WIDTH * _FB_HEIGHT * _FB_BPP  # 768,000 bytes
 
 
 def _active_framebuffer_address(ocd) -> int:
@@ -877,29 +877,23 @@ def _active_framebuffer_address(ocd) -> int:
 
 def _raw_to_png(raw_path: str, png_path: str,
                 width: int = _FB_WIDTH, height: int = _FB_HEIGHT) -> None:
-    """Convert a raw ARGB8888 framebuffer dump to a PNG file.
-
-    The STM32 LTDC stores ARGB8888 as 0xAARRGGBB words.  In little-endian
-    memory that's bytes BB GG RR AA.  PNG RGBA expects RR GG BB AA, so we
-    swap bytes 0 and 2 (B <-> R) in each pixel.
-
-    Uses only stdlib (struct + zlib).
-    """
+    """Convert a little-endian RGB565 framebuffer dump to a PNG file."""
     import zlib
 
     with open(raw_path, "rb") as f:
-        raw = bytearray(f.read())
+        raw = f.read()
 
-    # Swap B and R channels: memory is [B,G,R,A], PNG wants [R,G,B,A]
-    raw[0::4], raw[2::4] = raw[2::4], raw[0::4]
-
-    # Build PNG scanlines: filter byte (0 = None) + row pixels
-    row_bytes = width * _FB_BPP
     scanlines = bytearray()
     for y in range(height):
         scanlines.append(0)
-        offset = y * row_bytes
-        scanlines.extend(raw[offset:offset + row_bytes])
+        row_start = y * width * _FB_BPP
+        for offset in range(row_start, row_start + width * _FB_BPP, 2):
+            pixel = raw[offset] | (raw[offset + 1] << 8)
+            scanlines.extend((
+                ((pixel >> 11) & 0x1F) << 3,
+                ((pixel >> 5) & 0x3F) << 2,
+                (pixel & 0x1F) << 3,
+            ))
 
     compressed = zlib.compress(bytes(scanlines))
 
@@ -910,9 +904,9 @@ def _raw_to_png(raw_path: str, png_path: str,
 
     with open(png_path, "wb") as f:
         f.write(b"\x89PNG\r\n\x1a\n")
-        # IHDR: width, height, bit-depth=8, color-type=6 (RGBA)
+        # IHDR: width, height, bit-depth=8, color-type=2 (RGB)
         f.write(_chunk(b"IHDR", struct.pack(">IIBBBBB",
-                                            width, height, 8, 6, 0, 0, 0)))
+                                            width, height, 8, 2, 0, 0, 0)))
         f.write(_chunk(b"IDAT", compressed))
         f.write(_chunk(b"IEND", b""))
 
@@ -925,7 +919,7 @@ def ui_screenshot(output: str, timeout: int):
     """Capture the display framebuffer and save as a PNG file.
 
     Halts the CPU, reads the LTDC framebuffer from SDRAM, converts the
-    raw ARGB8888 data to a PNG, then resumes the CPU.
+    raw RGB565 data to a PNG, then resumes the CPU.
 
     \b
     Examples:

@@ -398,34 +398,32 @@ class TestRawToPng:
             assert w == _FB_WIDTH
             assert h == _FB_HEIGHT
             assert depth == 8
-            assert ctype == 6  # RGBA
+            assert ctype == 2  # RGB
         finally:
             os.unlink(raw_path)
             os.unlink(png_path)
 
-    def test_pixel_channel_swap(self):
-        """B and R channels must be swapped (BGRA in memory -> RGBA in PNG)."""
-        # Single 1x1 pixel: memory [B=0x11, G=0x22, R=0x33, A=0xFF]
-        raw_path = _write_raw_file(b"\x11\x22\x33\xFF")
+    def test_rgb565_pixel_expansion(self):
+        """A little-endian RGB565 pixel must expand to RGB."""
+        raw_path = _write_raw_file(b"\x00\xF8")  # Red: 0b11111_000000_00000
         fd, png_path = tempfile.mkstemp(suffix=".png")
         os.close(fd)
         try:
             _raw_to_png(raw_path, png_path, width=1, height=1)
             _, _, _, _, scanlines = _parse_png(png_path)
-            # scanline = filter_byte(0) + R G B A
-            assert scanlines == b"\x00\x33\x22\x11\xFF"
+            assert scanlines == b"\x00\xF8\x00\x00"
         finally:
             os.unlink(raw_path)
             os.unlink(png_path)
 
     def test_small_image_roundtrip(self):
         """A 2x2 image should encode all pixels correctly."""
-        # 2x2 pixels in BGRA order
+        # 2x2 little-endian RGB565 pixels: blue, green, red, mid-gray.
         pixels = (
-            b"\xFF\x00\x00\xFF"  # pixel(0,0): B=FF G=00 R=00 A=FF
-            b"\x00\xFF\x00\xFF"  # pixel(1,0): B=00 G=FF R=00 A=FF
-            b"\x00\x00\xFF\xFF"  # pixel(0,1): B=00 G=00 R=FF A=FF
-            b"\x80\x80\x80\xFF"  # pixel(1,1): B=80 G=80 R=80 A=FF
+            b"\x1F\x00"
+            b"\xE0\x07"
+            b"\x00\xF8"
+            b"\x10\x84"
         )
         raw_path = _write_raw_file(pixels)
         fd, png_path = tempfile.mkstemp(suffix=".png")
@@ -433,11 +431,9 @@ class TestRawToPng:
         try:
             _raw_to_png(raw_path, png_path, width=2, height=2)
             _, _, _, _, scanlines = _parse_png(png_path)
-            # Row 0: filter(0) + [R=00 G=00 B=FF A=FF] [R=00 G=FF B=00 A=FF]
-            # Row 1: filter(0) + [R=FF G=00 B=00 A=FF] [R=80 G=80 B=80 A=FF]
             expected = (
-                b"\x00" + b"\x00\x00\xFF\xFF" + b"\x00\xFF\x00\xFF"
-                + b"\x00" + b"\xFF\x00\x00\xFF" + b"\x80\x80\x80\xFF"
+                b"\x00" + b"\x00\x00\xF8" + b"\x00\xFC\x00"
+                + b"\x00" + b"\xF8\x00\x00" + b"\x80\x80\x80"
             )
             assert scanlines == expected
         finally:
@@ -447,7 +443,7 @@ class TestRawToPng:
     def test_custom_dimensions(self):
         """Encoder should respect custom width/height parameters."""
         w, h = 3, 2
-        raw_path = _write_raw_file(b"\x00" * (w * h * 4))
+        raw_path = _write_raw_file(b"\x00" * (w * h * 2))
         fd, png_path = tempfile.mkstemp(suffix=".png")
         os.close(fd)
         try:
