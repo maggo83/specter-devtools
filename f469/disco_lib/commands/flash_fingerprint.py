@@ -2,12 +2,11 @@
 
 import os
 
-import click
+from .. import console
 
 from .. import flash as flash_backend
 
 
-@click.group("fingerprint")
 def fingerprint():
     """Firmware fingerprint commands.
 
@@ -37,42 +36,39 @@ def _flash_and_verify(ocd, filepath: str, addr: int) -> bool:
     """Flash firmware and verify. Returns True on success."""
     import time
 
-    click.echo("Flashing firmware...")
+    console.echo("Flashing firmware...")
     if not flash_backend.program_firmware(ocd, filepath, addr):
-        click.secho("Flash failed", fg="red")
+        console.secho("Flash failed", fg="red")
         return False
 
     # Wait for target to stabilize after reset - OpenOCD needs time to
     # re-establish connection after reset, otherwise we get "Connection reset"
     time.sleep(2.0)
 
-    click.echo("Verifying flash...")
+    console.echo("Verifying flash...")
     if not flash_backend.verify_firmware(ocd, filepath, addr):
-        click.secho("Flash verification failed", fg="red")
+        console.secho("Flash verification failed", fg="red")
         return False
 
-    click.secho("Flash verified OK", fg="green")
+    console.secho("Flash verified OK", fg="green")
     return True
 
 
 def _print_fingerprint_summary(fingerprint: dict, runtime_results: dict = None):
     """Print fingerprint summary."""
-    click.echo(f"Name: {fingerprint['name']}")
-    click.echo(f"Size: {fingerprint['static']['size_bytes']:,} bytes")
-    click.echo(f"SHA256: {fingerprint['static']['sha256'][:16]}...")
-    click.echo(f"Build: {fingerprint['static']['build_type']}")
-    click.echo(f"Regions: {len(fingerprint['static']['regions'])}")
+    console.echo(f"Name: {fingerprint['name']}")
+    console.echo(f"Size: {fingerprint['static']['size_bytes']:,} bytes")
+    console.echo(f"SHA256: {fingerprint['static']['sha256'][:16]}...")
+    console.echo(f"Build: {fingerprint['static']['build_type']}")
+    console.echo(f"Regions: {len(fingerprint['static']['regions'])}")
     if runtime_results:
-        click.echo()
-        click.echo("Runtime:")
+        console.echo()
+        console.echo("Runtime:")
         for key, val in runtime_results.items():
-            icon = click.style("OK", fg="green") if val else click.style("FAIL", fg="red")
-            click.echo(f"  {icon} {key}: {val}")
+            icon = console.style("OK", fg="green") if val else console.style("FAIL", fg="red")
+            console.echo(f"  {icon} {key}: {val}")
 
 
-@fingerprint.command("create")
-@click.argument("file", type=click.Path(exists=True))
-@click.option("--output", "-o", type=click.Path(), help="Output YAML file (default: fingerprint.yaml in same dir)")
 def fingerprint_create(file: str, output: str):
     """Create new fingerprint for firmware file.
 
@@ -91,38 +87,35 @@ def fingerprint_create(file: str, output: str):
         output = os.path.join(os.path.dirname(os.path.abspath(file)), "fingerprint.yaml")
 
     if os.path.exists(output):
-        click.secho(f"Error: {output} already exists. Use 'update' instead.", fg="red")
+        console.secho(f"Error: {output} already exists. Use 'update' instead.", fg="red")
         raise SystemExit(1)
 
-    click.echo("Analyzing firmware...")
+    console.echo("Analyzing firmware...")
     fp = flash_backend.generate_fingerprint(file)
 
     # Get flash address from fingerprint
     flash_addr_str = fp.get("static", {}).get("flash_address", "0x08020000")
     flash_addr = int(flash_addr_str, 16)
-    click.echo(f"Flash address: {flash_addr_str} (auto-detected)")
+    console.echo(f"Flash address: {flash_addr_str} (auto-detected)")
 
     with with_ocd() as ocd:
         if not _flash_and_verify(ocd, file, flash_addr):
             raise SystemExit(1)
 
-        click.echo("Waiting for device to boot...")
+        console.echo("Waiting for device to boot...")
         time.sleep(5.0)  # Wait for boot + USB re-enumeration
 
-        click.echo("Running runtime tests...")
+        console.echo("Running runtime tests...")
         ser = SerialDevice()
         runtime = flash_backend.test_runtime(ocd, ser)
         fp["runtime"] = runtime
 
     _write_fingerprint(fp, output)
-    click.secho(f"\nFingerprint created: {output}", fg="green")
-    click.echo()
+    console.secho(f"\nFingerprint created: {output}", fg="green")
+    console.echo()
     _print_fingerprint_summary(fp, runtime)
 
 
-@fingerprint.command("update")
-@click.argument("file", type=click.Path(exists=True))
-@click.option("--output", "-o", type=click.Path(), help="Output YAML file (default: fingerprint.yaml in same dir)")
 def fingerprint_update(file: str, output: str):
     """Update fingerprint for firmware file.
 
@@ -140,36 +133,33 @@ def fingerprint_update(file: str, output: str):
     if output is None:
         output = os.path.join(os.path.dirname(os.path.abspath(file)), "fingerprint.yaml")
 
-    click.echo("Analyzing firmware...")
+    console.echo("Analyzing firmware...")
     fp = flash_backend.generate_fingerprint(file)
 
     # Get flash address from fingerprint
     flash_addr_str = fp.get("static", {}).get("flash_address", "0x08020000")
     flash_addr = int(flash_addr_str, 16)
-    click.echo(f"Flash address: {flash_addr_str} (auto-detected)")
+    console.echo(f"Flash address: {flash_addr_str} (auto-detected)")
 
     with with_ocd() as ocd:
         if not _flash_and_verify(ocd, file, flash_addr):
             raise SystemExit(1)
 
-        click.echo("Waiting for device to boot...")
+        console.echo("Waiting for device to boot...")
         time.sleep(5.0)  # Wait for boot + USB re-enumeration
 
-        click.echo("Running runtime tests...")
+        console.echo("Running runtime tests...")
         ser = SerialDevice()
         runtime = flash_backend.test_runtime(ocd, ser)
         fp["runtime"] = runtime
 
     action = "updated" if os.path.exists(output) else "created"
     _write_fingerprint(fp, output)
-    click.secho(f"\nFingerprint {action}: {output}", fg="green")
-    click.echo()
+    console.secho(f"\nFingerprint {action}: {output}", fg="green")
+    console.echo()
     _print_fingerprint_summary(fp, runtime)
 
 
-@fingerprint.command("test")
-@click.argument("fingerprint_file", type=click.Path(exists=True))
-@click.option("--static-only", is_flag=True, help="Only compare file fingerprint (no flash, no hardware)")
 def fingerprint_test(fingerprint_file: str, static_only: bool):
     """Test current state against existing fingerprint.
 
@@ -189,7 +179,7 @@ def fingerprint_test(fingerprint_file: str, static_only: bool):
 
     # Validate file type
     if not fingerprint_file.endswith(('.yaml', '.yml')):
-        raise click.ClickException(
+        raise console.CliError(
             f"Expected a fingerprint YAML file, got: {os.path.basename(fingerprint_file)}\n"
             f"Usage: disco flash fingerprint test fingerprint.yaml"
         )
@@ -200,15 +190,15 @@ def fingerprint_test(fingerprint_file: str, static_only: bool):
 
     firmware_file = os.path.join(os.path.dirname(fingerprint_file), expected.get("filename", ""))
 
-    click.echo(f"Testing against: {fingerprint_file}")
-    click.echo(f"Firmware: {expected.get('filename')}")
+    console.echo(f"Testing against: {fingerprint_file}")
+    console.echo(f"Firmware: {expected.get('filename')}")
     if static_only:
-        click.echo("Mode: static only (no flash, no hardware)")
+        console.echo("Mode: static only (no flash, no hardware)")
 
     if not os.path.exists(firmware_file):
-        raise click.ClickException(f"Firmware file not found: {firmware_file}")
+        raise console.CliError(f"Firmware file not found: {firmware_file}")
 
-    click.echo("Analyzing firmware...")
+    console.echo("Analyzing firmware...")
     current = flash_backend.generate_fingerprint(firmware_file)
 
     runtime = None
@@ -220,20 +210,20 @@ def fingerprint_test(fingerprint_file: str, static_only: bool):
         flash_addr_str = expected.get("static", {}).get("flash_address")
         if flash_addr_str:
             flash_addr = int(flash_addr_str, 16)
-            click.echo(f"Flash address: {flash_addr_str} (from fingerprint)")
+            console.echo(f"Flash address: {flash_addr_str} (from fingerprint)")
         else:
             flash_addr_str = current.get("static", {}).get("flash_address", "0x08020000")
             flash_addr = int(flash_addr_str, 16)
-            click.echo(f"Flash address: {flash_addr_str} (auto-detected)")
+            console.echo(f"Flash address: {flash_addr_str} (auto-detected)")
 
         with with_ocd() as ocd:
             if not _flash_and_verify(ocd, firmware_file, flash_addr):
-                raise click.ClickException("Flash/verify failed")
+                raise console.CliError("Flash/verify failed")
 
-            click.echo("Waiting for device to boot...")
+            console.echo("Waiting for device to boot...")
             time.sleep(5.0)  # Wait for boot + USB re-enumeration
 
-            click.echo("Running runtime tests...")
+            console.echo("Running runtime tests...")
             ser = SerialDevice()
             runtime = flash_backend.test_runtime(ocd, ser)
             current["runtime"] = runtime
@@ -243,13 +233,13 @@ def fingerprint_test(fingerprint_file: str, static_only: bool):
 
     if not diffs:
         msg = "static fingerprint matches" if static_only else "fingerprint matches"
-        click.secho(f"\nAll tests passed - {msg}", fg="green")
+        console.secho(f"\nAll tests passed - {msg}", fg="green")
         raise SystemExit(0)
 
     # Show differences
-    click.secho(f"\n{len(diffs)} difference(s) found:", fg="red")
+    console.secho(f"\n{len(diffs)} difference(s) found:", fg="red")
     for key, diff in diffs.items():
-        click.echo(f"  {key}: expected={diff['expected']}, actual={diff['actual']}")
+        console.echo(f"  {key}: expected={diff['expected']}, actual={diff['actual']}")
 
     # Write diff file
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -264,5 +254,5 @@ def fingerprint_test(fingerprint_file: str, static_only: bool):
     with open(diff_file, "w") as f:
         yaml.dump(diff_data, f, default_flow_style=False, sort_keys=False)
 
-    click.secho(f"\nDiff written to: {diff_file}", fg="yellow")
+    console.secho(f"\nDiff written to: {diff_file}", fg="yellow")
     raise SystemExit(1)

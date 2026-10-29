@@ -7,9 +7,8 @@ import time
 from contextlib import contextmanager
 from typing import Generator
 
-import click
-
 from . import OPENOCD_CFG, OPENOCD_LOG, OPENOCD_PORT
+from . import console
 
 STOP_TIMEOUT = 3.0
 STOP_POLL_INTERVAL = 0.05
@@ -69,7 +68,7 @@ class OpenOCD:
                     except socket.timeout:
                         continue
                 if not completed:
-                    raise click.ClickException(
+                    raise console.CliError(
                         f"OpenOCD command timed out after {timeout:g} s"
                     )
 
@@ -94,15 +93,15 @@ class OpenOCD:
                     lines.append(line)
                 return "\n".join(lines)
         except (ConnectionRefusedError, socket.timeout, OSError) as e:
-            raise click.ClickException(f"OpenOCD connection failed: {e}")
+            raise console.CliError(f"OpenOCD connection failed: {e}")
 
     def start(self) -> bool:
         """Start OpenOCD in background. Returns True if started successfully."""
         if self.is_running():
-            click.secho("OpenOCD already running", fg="yellow")
+            console.secho("OpenOCD already running", fg="yellow")
             return True
 
-        click.secho("Starting OpenOCD...", fg="blue")
+        console.secho("Starting OpenOCD...", fg="blue")
         with open(OPENOCD_LOG, "w") as log:
             self._process = subprocess.Popen(
                 ["openocd", "-f", OPENOCD_CFG],
@@ -115,17 +114,17 @@ class OpenOCD:
         for _ in range(10):
             time.sleep(0.3)
             if self.is_running():
-                click.secho("OpenOCD connected successfully", fg="green")
+                console.secho("OpenOCD connected successfully", fg="green")
                 # Report without halting: a halted CPU stops the UI and USB CDC.
-                click.echo(f"Target info:\n{self.send('targets')}")
+                console.echo(f"Target info:\n{self.send('targets')}")
                 return True
 
-        click.secho(f"Failed to connect. Check {OPENOCD_LOG}", fg="red")
+        console.secho(f"Failed to connect. Check {OPENOCD_LOG}", fg="red")
         try:
             with open(OPENOCD_LOG) as f:
-                click.echo(f.read())
+                console.echo(f.read())
         except FileNotFoundError:
-            click.echo(f"(log file {OPENOCD_LOG} not found)")
+            console.echo(f"(log file {OPENOCD_LOG} not found)")
         self.stop()
         return False
 
@@ -137,7 +136,7 @@ class OpenOCD:
                 process.terminate()
                 process.wait(timeout=STOP_TIMEOUT)
             except subprocess.TimeoutExpired:
-                click.secho(
+                console.secho(
                     "OpenOCD did not stop after SIGTERM; killing it",
                     fg="yellow",
                 )
@@ -145,12 +144,12 @@ class OpenOCD:
                 try:
                     process.wait(timeout=STOP_TIMEOUT)
                 except subprocess.TimeoutExpired as error:
-                    raise click.ClickException(
+                    raise console.CliError(
                         f"OpenOCD could not be killed within {STOP_TIMEOUT:g} s"
                     ) from error
             finally:
                 self._process = None
-            click.secho("OpenOCD stopped", fg="green")
+            console.secho("OpenOCD stopped", fg="green")
             return
 
         result = subprocess.run(["pkill", "-x", "openocd"], capture_output=True)
@@ -158,13 +157,13 @@ class OpenOCD:
             deadline = time.monotonic() + STOP_TIMEOUT
             while self.is_running():
                 if time.monotonic() >= deadline:
-                    raise click.ClickException(
+                    raise console.CliError(
                         f"OpenOCD did not stop within {STOP_TIMEOUT:g} s"
                     )
                 time.sleep(STOP_POLL_INTERVAL)
-            click.secho("OpenOCD stopped", fg="green")
+            console.secho("OpenOCD stopped", fg="green")
         else:
-            click.secho("OpenOCD not running", fg="yellow")
+            console.secho("OpenOCD not running", fg="yellow")
 
     @contextmanager
     def ensure_running(self) -> Generator["OpenOCD", None, None]:
@@ -180,7 +179,7 @@ class OpenOCD:
         was_running = self.is_running()
         if not was_running:
             if not self.start():
-                raise click.ClickException("Failed to start OpenOCD")
+                raise console.CliError("Failed to start OpenOCD")
         try:
             yield self
         finally:

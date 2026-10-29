@@ -1,6 +1,6 @@
 """Automated board diagnostics command."""
 
-import click
+from .. import console
 
 from ..ocd_provider import get_ocd
 from ..serial import SerialDevice
@@ -9,9 +9,6 @@ from ..diagnostics import run_diagnostics
 _ser = SerialDevice()
 
 
-@click.command()
-@click.option("--verbose", "-v", is_flag=True, help="Show all check details")
-@click.option("--no-log", is_flag=True, help="Skip writing log file")
 def doctor(verbose: bool, no_log: bool):
     """Run automated board diagnostics.
 

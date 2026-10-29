@@ -1,13 +1,12 @@
 """CPU control commands."""
 
-import click
+from .. import console
 
 from ..ocd_provider import get_ocd
 from .. import cpu as cpu_backend
 from .. import memory
 
 
-@click.group()
 def cpu():
     """CPU control commands.
 
@@ -32,7 +31,6 @@ def cpu():
     pass
 
 
-@cpu.command("halt")
 def cpu_halt():
     """Halt the CPU.
 
@@ -40,80 +38,70 @@ def cpu_halt():
     """
     with get_ocd().ensure_running():
         cpu_backend.halt(get_ocd())
-        click.secho("CPU halted", fg="green")
-        click.secho("Note: USB CDC (REPL) disconnected while halted", fg="yellow")
-        click.echo(cpu_backend.read_pc_sp(get_ocd()))
+        console.secho("CPU halted", fg="green")
+        console.secho("Note: USB CDC (REPL) disconnected while halted", fg="yellow")
+        console.echo(cpu_backend.read_pc_sp(get_ocd()))
 
 
-@cpu.command("resume")
 def cpu_resume():
     """Resume execution."""
     with get_ocd().ensure_running():
         cpu_backend.resume(get_ocd())
-        click.secho("CPU resumed", fg="green")
+        console.secho("CPU resumed", fg="green")
 
 
-@cpu.command("reset")
 def cpu_reset():
     """Reset and halt."""
     with get_ocd().ensure_running():
         cpu_backend.reset_halt(get_ocd())
-        click.secho("CPU reset and halted", fg="green")
-        click.echo(cpu_backend.read_pc_sp(get_ocd()))
+        console.secho("CPU reset and halted", fg="green")
+        console.echo(cpu_backend.read_pc_sp(get_ocd()))
 
 
-@cpu.command("step")
 def cpu_step():
     """Single step."""
     with get_ocd().ensure_running():
         cpu_backend.step(get_ocd())
-        click.echo(cpu_backend.read_reg(get_ocd(), "pc"))
+        console.echo(cpu_backend.read_reg(get_ocd(), "pc"))
 
 
-@cpu.command("regs")
 def cpu_regs():
     """Show all CPU registers."""
     with get_ocd().ensure_running():
-        click.secho("=== CPU Registers ===", fg="blue")
+        console.secho("=== CPU Registers ===", fg="blue")
         with cpu_backend.halted(get_ocd()):
-            click.echo(cpu_backend.read_regs(get_ocd()))
+            console.echo(cpu_backend.read_regs(get_ocd()))
 
 
-@cpu.command("pc")
 def cpu_pc():
     """Show current PC and memory around it."""
     with get_ocd().ensure_running():
-        click.secho("=== Current PC ===", fg="blue")
+        console.secho("=== Current PC ===", fg="blue")
         with cpu_backend.halted(get_ocd()):
             pc_val = cpu_backend.read_pc(get_ocd())
             if pc_val is not None:
-                click.echo(f"PC: 0x{pc_val:08x}")
-                click.echo()
-                click.echo("Memory around PC:")
+                console.echo(f"PC: 0x{pc_val:08x}")
+                console.echo()
+                console.echo("Memory around PC:")
                 pc_aligned = (pc_val & ~0xF) - 0x10
-                click.echo(memory.read_words(get_ocd(), pc_aligned, 16))
+                console.echo(memory.read_words(get_ocd(), pc_aligned, 16))
             else:
-                click.echo(cpu_backend.read_reg(get_ocd(), "pc"))
+                console.echo(cpu_backend.read_reg(get_ocd(), "pc"))
 
 
-@cpu.command("stack")
-@click.argument("count", default=16, type=int)
 def cpu_stack(count: int):
     """Show stack (N words, default 16)."""
     with get_ocd().ensure_running():
-        click.secho(f"=== Stack ({count} words) ===", fg="blue")
+        console.secho(f"=== Stack ({count} words) ===", fg="blue")
         with cpu_backend.halted(get_ocd()):
             sp_val = cpu_backend.read_sp(get_ocd())
             if sp_val is not None:
-                click.echo(f"SP: 0x{sp_val:08x}")
-                click.echo(memory.read_words(get_ocd(), sp_val, count))
+                console.echo(f"SP: 0x{sp_val:08x}")
+                console.echo(memory.read_words(get_ocd(), sp_val, count))
             else:
-                click.echo(cpu_backend.read_reg(get_ocd(), "sp"))
+                console.echo(cpu_backend.read_reg(get_ocd(), "sp"))
 
 
-@cpu.command("gdb")
-@click.argument("elf", type=click.Path(exists=True), required=False)
-@click.option("--run", is_flag=True, help="Actually launch GDB (default: just print command)")
 def cpu_gdb(elf: str, run: bool):
     """Show or launch GDB command for debugging.
 
@@ -146,7 +134,7 @@ def cpu_gdb(elf: str, run: bool):
     # GDB connects to OpenOCD separately, so we just verify it's running
     # (don't auto-start/stop - that would break GDB's connection)
     if not get_ocd().is_running():
-        raise click.ClickException("OpenOCD not running. Run 'disco ocd start' first.")
+        raise console.CliError("OpenOCD not running. Run 'disco ocd start' first.")
 
     # Find GDB
     gdb_names = ["arm-none-eabi-gdb", "gdb-multiarch", "gdb"]
@@ -157,7 +145,7 @@ def cpu_gdb(elf: str, run: bool):
             break
 
     if not gdb_path:
-        click.secho("Error: No ARM GDB found. Install arm-none-eabi-gdb", fg="red")
+        console.secho("Error: No ARM GDB found. Install arm-none-eabi-gdb", fg="red")
         return
 
     # Build command
@@ -169,10 +157,10 @@ def cpu_gdb(elf: str, run: bool):
     cmd_str = " ".join(f'"{p}"' if " " in p else p for p in cmd_parts)
 
     if run:
-        click.secho(f"Launching: {cmd_str}", fg="green")
+        console.secho(f"Launching: {cmd_str}", fg="green")
         os.execvp(gdb_path, cmd_parts)
     else:
-        click.secho("=== GDB Command ===", fg="blue")
-        click.echo(cmd_str)
-        click.echo()
-        click.secho("Run with --run flag to launch, or copy/paste the command", fg="yellow")
+        console.secho("=== GDB Command ===", fg="blue")
+        console.echo(cmd_str)
+        console.echo()
+        console.secho("Run with --run flag to launch, or copy/paste the command", fg="yellow")

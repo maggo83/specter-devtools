@@ -12,7 +12,7 @@ import os
 import tempfile
 
 import pytest
-from click.testing import CliRunner
+from disco_lib.testing import CliRunner
 
 from disco_lib.commands.flash import flash_info, flash_identify, flash_read, flash_verify, flash_erase
 from disco_lib.commands.mem import mem_read, mem_vectors, mem_dump, mem_save
@@ -190,7 +190,8 @@ class TestCheckCommandResumes:
         """check should resume even if a command fails."""
         ocd_mock.set_error_on("mdw 0x08020000", Exception("read failed"))
         runner = CliRunner()
-        runner.invoke(check)
+        with pytest.raises(Exception, match="read failed"):
+            runner.invoke(check)
 
 
 class TestCablesCommandResumes:
@@ -208,7 +209,8 @@ class TestCablesCommandResumes:
         """cables should resume even if reg pc fails."""
         ocd_mock.set_error_on("reg pc", Exception("target not responding"))
         runner = CliRunner()
-        runner.invoke(cables)
+        with pytest.raises(Exception, match="target not responding"):
+            runner.invoke(cables)
 
 
 class TestOCDMockBehavior:

@@ -256,11 +256,11 @@ class TestWaitForPrompt:
     def test_cli_fails_on_timeout(self, monkeypatch):
         import importlib
 
-        from click.testing import CliRunner
+        from disco_lib.testing import CliRunner
 
         repl_commands = importlib.import_module("disco_lib.commands.repl")
 
-        def timeout(*args):
+        def timeout(*args, **kwargs):
             raise TimeoutError("No REPL prompt within 1 s")
 
         monkeypatch.setattr(repl_commands.repl_backend, "wait_for_prompt", timeout)
@@ -364,27 +364,29 @@ class TestNoSoftReset:
     def test_reset_command_resets_then_waits(self, monkeypatch):
         import importlib
 
-        from click.testing import CliRunner
+        from disco_lib.testing import CliRunner
 
         commands = importlib.import_module("disco_lib.commands.repl")
         steps = []
         monkeypatch.setattr(commands._ser, "require_device", lambda: "/dev/fake")
         monkeypatch.setattr(commands.repl_backend, "hard_reset", lambda dev, baud: steps.append("reset"))
 
-        def wait(find, baud, timeout):
-            steps.append(("wait", timeout))
+        def wait(find, baud, timeout, interrupt_running=False):
+            steps.append(("wait", timeout, interrupt_running))
             raise TimeoutError(f"No REPL prompt within {timeout} s")
 
         monkeypatch.setattr(commands.repl_backend, "wait_for_prompt", wait)
-        result = CliRunner().invoke(commands.repl, ["reset", "--timeout", "5"])
+        result = CliRunner().invoke(
+            commands.repl, ["reset", "--timeout", "5", "--interrupt-running"]
+        )
 
-        assert steps == ["reset", ("wait", 5)]
+        assert steps == ["reset", ("wait", 5, True)]
         assert result.exit_code == 1 and "No REPL prompt within 5 s" in result.output
 
     def test_reset_waits_for_the_board_it_reset(self, monkeypatch, tmp_path):
         import importlib
 
-        from click.testing import CliRunner
+        from disco_lib.testing import CliRunner
 
         commands = importlib.import_module("disco_lib.commands.repl")
         board = tmp_path / "usb-MicroPython_board_A"
@@ -394,7 +396,8 @@ class TestNoSoftReset:
         monkeypatch.setattr(commands.repl_backend, "hard_reset", lambda dev, baud: board.unlink())
         seen = []
 
-        def wait(find, baud, timeout):
+        def wait(find, baud, timeout, interrupt_running=False):
+            assert not interrupt_running
             seen.append(find())
             board.touch()
             seen.append(find())

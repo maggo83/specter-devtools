@@ -4,7 +4,7 @@ import re
 import subprocess
 import sys
 
-import click
+from .. import console
 
 from ..ocd_provider import get_ocd
 from ..serial import SerialDevice
@@ -94,10 +94,9 @@ def _check_usb_devices():
     return result
 
 
-@click.command()
 def cables():
     """Detect connected USB cables."""
-    click.secho("=== Cable Detection ===", fg="blue")
+    console.secho("=== Cable Detection ===", fg="blue")
 
     # Check raw USB hardware
     usb = _check_usb_devices()
@@ -135,55 +134,55 @@ def cables():
             pc_val = cpu_backend.read_pc(get_ocd())
             jtag_ok = pc_val is not None
 
-    click.echo()
+    console.echo()
     if usb["error"]:
-        click.secho(f"USB detection error: {usb['error']}", fg="yellow")
-        click.echo()
+        console.secho(f"USB detection error: {usb['error']}", fg="yellow")
+        console.echo()
 
-    click.echo("MiniUSB (ST-LINK connector, CN1 — top of board):")
+    console.echo("MiniUSB (ST-LINK connector, CN1 — top of board):")
     if not usb["stlink"]:
         if usb_subsystem_errors:
-            click.secho("  USB: NOT DETECTED - USB subsystem errors (see below)", fg="red")
+            console.secho("  USB: NOT DETECTED - USB subsystem errors (see below)", fg="red")
         else:
-            click.secho("  USB: NOT DETECTED - check cable!", fg="red")
+            console.secho("  USB: NOT DETECTED - check cable!", fg="red")
     elif jtag_ok:
-        click.secho("  JTAG: connected", fg="green")
+        console.secho("  JTAG: connected", fg="green")
     elif ocd_running:
-        click.secho("  JTAG: OpenOCD running but target not responding", fg="yellow")
+        console.secho("  JTAG: OpenOCD running but target not responding", fg="yellow")
     else:
-        click.secho("  USB: detected", fg="green")
-        click.secho("  JTAG: OpenOCD not running (use 'disco ocd start')", fg="yellow")
+        console.secho("  USB: detected", fg="green")
+        console.secho("  JTAG: OpenOCD not running (use 'disco ocd start')", fg="yellow")
     if stlink_serial:
-        click.secho("  Serial (VCP): available", fg="green")
+        console.secho("  Serial (VCP): available", fg="green")
     elif usb["stlink"]:
-        click.secho("  Serial (VCP): not detected", fg="yellow")
+        console.secho("  Serial (VCP): not detected", fg="yellow")
 
-    click.echo()
-    click.echo("MicroUSB (USB OTG connector, CN13 — bottom of board):")
+    console.echo()
+    console.echo("MicroUSB (USB OTG connector, CN13 — bottom of board):")
     if not usb["micropython"]:
         if usb_subsystem_errors:
-            click.secho("  USB: NOT DETECTED - USB subsystem errors (see below)", fg="red")
+            console.secho("  USB: NOT DETECTED - USB subsystem errors (see below)", fg="red")
         else:
-            click.secho("  USB: NOT DETECTED - check cable!", fg="red")
+            console.secho("  USB: NOT DETECTED - check cable!", fg="red")
     elif usb_otg_serial:
-        click.secho("  Serial (CDC): available - REPL should work", fg="green")
+        console.secho("  Serial (CDC): available - REPL should work", fg="green")
     else:
-        click.secho("  USB: detected, but CDC interface is missing. This may indicate a firmware issue or incorrect USB detection logic", fg="yellow")
+        console.secho("  USB: detected, but CDC interface is missing. This may indicate a firmware issue or incorrect USB detection logic", fg="yellow")
 
-    click.echo()
+    console.echo()
     if usb_subsystem_errors and (not usb["stlink"] or not usb["micropython"]):
-        click.secho("USB subsystem errors detected in dmesg!", fg="red")
-        click.echo("This is likely a host issue, not a cable problem.")
-        click.echo()
-        click.echo("To reset the USB bus (may fix without reboot):")
-        click.secho("  echo 0 | sudo tee /sys/bus/usb/devices/usb1/authorized", fg="cyan")
-        click.secho("  sleep 2", fg="cyan")
-        click.secho("  echo 1 | sudo tee /sys/bus/usb/devices/usb1/authorized", fg="cyan")
-        click.echo()
-        click.echo("If that doesn't work, reboot the host.")
+        console.secho("USB subsystem errors detected in dmesg!", fg="red")
+        console.echo("This is likely a host issue, not a cable problem.")
+        console.echo()
+        console.echo("To reset the USB bus (may fix without reboot):")
+        console.secho("  echo 0 | sudo tee /sys/bus/usb/devices/usb1/authorized", fg="cyan")
+        console.secho("  sleep 2", fg="cyan")
+        console.secho("  echo 1 | sudo tee /sys/bus/usb/devices/usb1/authorized", fg="cyan")
+        console.echo()
+        console.echo("If that doesn't work, reboot the host.")
     elif not usb["stlink"] and not usb["micropython"]:
-        click.secho("No USB devices detected - check both cables!", fg="red")
+        console.secho("No USB devices detected - check both cables!", fg="red")
     elif not usb["stlink"]:
-        click.secho("Tip: ST-LINK cable not connected or bad cable", fg="yellow")
+        console.secho("Tip: ST-LINK cable not connected or bad cable", fg="yellow")
     elif not usb_otg_serial:
-        click.secho("Tip: Connect microUSB cable for REPL access (CN13, bottom of board)", fg="yellow")
+        console.secho("Tip: Connect microUSB cable for REPL access (CN13, bottom of board)", fg="yellow")

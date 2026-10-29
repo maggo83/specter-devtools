@@ -3,7 +3,7 @@
 import os
 import time
 
-import click
+from .. import console
 import serial as pyserial
 
 from ..serial import SerialDevice
@@ -12,7 +12,6 @@ from .. import repl as repl_backend
 _ser = SerialDevice()
 
 
-@click.group()
 def repl():
     """MicroPython REPL interaction.
 
@@ -39,9 +38,6 @@ def repl():
     pass
 
 
-@repl.command("exec")
-@click.argument("code")
-@click.option("--timeout", "-t", default=3, type=int, help="Response timeout in seconds")
 def repl_exec(code: str, timeout: int):
     """Execute Python code on REPL.
 
@@ -55,61 +51,55 @@ def repl_exec(code: str, timeout: int):
     try:
         output = repl_backend.exec_code(dev, code, _ser.baud, timeout)
         if output:
-            click.echo(output)
+            console.echo(output)
     except pyserial.SerialException as e:
-        raise click.ClickException(f"Serial error: {e}")
+        raise console.CliError(f"Serial error: {e}")
 
 
-@repl.command("info")
 def repl_info():
     """Show board info (sys.implementation, machine.freq, etc)."""
     dev = _ser.require_device()
     try:
-        click.secho("=== Board Info ===", fg="blue")
+        console.secho("=== Board Info ===", fg="blue")
 
         output = repl_backend.exec_code(dev, "import sys; print(sys.implementation)", _ser.baud, 2)
-        click.echo(f"Implementation: {output}")
+        console.echo(f"Implementation: {output}")
 
         output = repl_backend.exec_code(dev, "import machine; print(machine.freq())", _ser.baud, 2)
-        click.echo(f"CPU Frequency: {output} Hz")
+        console.echo(f"CPU Frequency: {output} Hz")
 
         output = repl_backend.exec_code(dev, "import gc; gc.collect(); print(gc.mem_free())", _ser.baud, 2)
-        click.echo(f"Free Memory: {output} bytes")
+        console.echo(f"Free Memory: {output} bytes")
 
         output = repl_backend.exec_code(dev, "import sys; print(sys.platform)", _ser.baud, 2)
-        click.echo(f"Platform: {output}")
+        console.echo(f"Platform: {output}")
 
     except pyserial.SerialException as e:
-        raise click.ClickException(f"Serial error: {e}")
+        raise console.CliError(f"Serial error: {e}")
 
 
-@repl.command("modules")
-@click.option("--timeout", "-t", default=5, type=int, help="Response timeout")
 def repl_modules(timeout: int):
     """List available MicroPython modules."""
     dev = _ser.require_device()
     try:
-        click.secho("=== Available Modules ===", fg="blue")
+        console.secho("=== Available Modules ===", fg="blue")
         output = repl_backend.exec_code(dev, "help('modules')", _ser.baud, timeout)
-        click.echo(output)
+        console.echo(output)
     except pyserial.SerialException as e:
-        raise click.ClickException(f"Serial error: {e}")
+        raise console.CliError(f"Serial error: {e}")
 
 
-@repl.command("help")
 def repl_help():
     """Show MicroPython help."""
     dev = _ser.require_device()
     try:
         output = repl_backend.exec_code(dev, "help()", _ser.baud, 3)
-        click.echo(output)
+        console.echo(output)
     except pyserial.SerialException as e:
-        raise click.ClickException(f"Serial error: {e}")
+        raise console.CliError(f"Serial error: {e}")
 
 
-@repl.command("reset")
-@click.option("--timeout", "-t", default=60, type=int, help="Seconds to wait for the REPL")
-def repl_reset(timeout: int):
+def repl_reset(timeout: int, interrupt_running: bool):
     """Reset the board and wait until its REPL answers again.
 
     \b
@@ -117,14 +107,19 @@ def repl_reset(timeout: int):
     reset: it makes MockUI's display.init() fail.
     """
     dev = _ser.require_device()
-    repl_backend.hard_reset(dev, _ser.baud)
+    try:
+        repl_backend.hard_reset(dev, _ser.baud)
+    except TimeoutError as error:
+        raise console.CliError(str(error)) from error
     # Wait for this board only; its by-id path (USB serial number) survives the reconnect.
-    _wait(timeout, lambda: dev if os.path.exists(dev) else None)
+    _wait(
+        timeout,
+        lambda: dev if os.path.exists(dev) else None,
+        interrupt_running=interrupt_running,
+    )
 
 
-@repl.command("wait")
-@click.option("--timeout", "-t", default=60, type=int, help="Seconds to wait")
-def repl_wait(timeout: int):
+def repl_wait(timeout: int, interrupt_running: bool):
     """Wait until the board answers on its REPL.
 
     \b
@@ -132,19 +127,22 @@ def repl_wait(timeout: int):
     the >>> prompt, without interrupting a booting main.py.
       disco flash program firmware.bin && disco repl wait
     """
-    _wait(timeout)
+    _wait(timeout, interrupt_running=interrupt_running)
 
 
-def _wait(timeout: int, find_device=None):
+def _wait(timeout: int, find_device=None, interrupt_running: bool = False):
     try:
-        dev = repl_backend.wait_for_prompt(find_device or _ser.auto_detect, _ser.baud, timeout)
+        dev = repl_backend.wait_for_prompt(
+            find_device or _ser.auto_detect,
+            _ser.baud,
+            timeout,
+            interrupt_running=interrupt_running,
+        )
     except TimeoutError as e:
-        raise click.ClickException(str(e))
-    click.secho(f"REPL ready on {dev}", fg="green")
+        raise console.CliError(str(e))
+    console.secho(f"REPL ready on {dev}", fg="green")
 
 
-@repl.command("hello")
-@click.argument("message", default="Hello World!")
 def repl_hello(message: str):
     """Display a message on the screen (large font, centered).
 
@@ -155,7 +153,7 @@ def repl_hello(message: str):
     """
     dev = _ser.require_device()
     try:
-        click.echo("Initializing display...")
+        console.echo("Initializing display...")
         repl_backend.exec_code(
             dev,
             "import display; display.init(True); import time; time.sleep_ms(100)",
@@ -172,16 +170,14 @@ def repl_hello(message: str):
             f"lbl.refresh_style(); lbl.align(None, lv.ALIGN.CENTER, 0, 0)"
         )
 
-        click.echo(f"Displaying: {message}")
+        console.echo(f"Displaying: {message}")
         repl_backend.exec_code(dev, code, _ser.baud, 3)
-        click.secho("Done!", fg="green")
+        console.secho("Done!", fg="green")
 
     except pyserial.SerialException as e:
-        raise click.ClickException(f"Serial error: {e}")
+        raise console.CliError(f"Serial error: {e}")
 
 
-@repl.command("ls")
-@click.argument("path", default="/flash")
 def repl_ls(path: str):
     """List files on the board.
 
@@ -195,18 +191,16 @@ def repl_ls(path: str):
     with repl_backend.mpremote_transport(dev, _ser.baud) as transport:
         try:
             files = transport.fs_listdir(path)
-            click.secho(f"=== {path} ===", fg="blue")
+            console.secho(f"=== {path} ===", fg="blue")
             for f in files:
                 if f.st_mode & 0x4000:  # directory
-                    click.secho(f"  {f.name}/", fg="cyan")
+                    console.secho(f"  {f.name}/", fg="cyan")
                 else:
-                    click.echo(f"  {f.name} ({f.st_size} bytes)")
+                    console.echo(f"  {f.name} ({f.st_size} bytes)")
         except Exception as e:
-            raise click.ClickException(f"Error listing {path}: {e}")
+            raise console.CliError(f"Error listing {path}: {e}")
 
 
-@repl.command("cat")
-@click.argument("path")
 def repl_cat(path: str):
     """Print file contents from board.
 
@@ -219,14 +213,11 @@ def repl_cat(path: str):
     with repl_backend.mpremote_transport(dev, _ser.baud) as transport:
         try:
             data = transport.fs_readfile(path)
-            click.echo(data.decode("utf-8", errors="replace"))
+            console.echo(data.decode("utf-8", errors="replace"))
         except Exception as e:
-            raise click.ClickException(f"Error reading {path}: {e}")
+            raise console.CliError(f"Error reading {path}: {e}")
 
 
-@repl.command("cp")
-@click.argument("src")
-@click.argument("dest")
 def repl_cp(src: str, dest: str):
     """Copy file to/from board.
 
@@ -248,32 +239,29 @@ def repl_cp(src: str, dest: str):
                 data = transport.fs_readfile(board_path)
                 with open(local_path, "wb") as f:
                     f.write(data)
-                click.secho(f"Copied {board_path} -> {local_path} ({len(data)} bytes)", fg="green")
+                console.secho(f"Copied {board_path} -> {local_path} ({len(data)} bytes)", fg="green")
             except Exception as e:
-                raise click.ClickException(f"Error copying: {e}")
+                raise console.CliError(f"Error copying: {e}")
 
     elif not src.startswith(":") and dest.startswith(":"):
         # Local -> board
         local_path = src
         board_path = dest[1:]
         if not os.path.exists(local_path):
-            raise click.ClickException(f"Local file not found: {local_path}")
+            raise console.CliError(f"Local file not found: {local_path}")
         with open(local_path, "rb") as f:
             data = f.read()
         with repl_backend.mpremote_transport(dev, _ser.baud) as transport:
             try:
                 transport.fs_writefile(board_path, data)
-                click.secho(f"Copied {local_path} -> {board_path} ({len(data)} bytes)", fg="green")
+                console.secho(f"Copied {local_path} -> {board_path} ({len(data)} bytes)", fg="green")
             except Exception as e:
-                raise click.ClickException(f"Error copying: {e}")
+                raise console.CliError(f"Error copying: {e}")
 
     else:
-        raise click.ClickException("Use : prefix for board paths (e.g., :/flash/file.py)")
+        raise console.CliError("Use : prefix for board paths (e.g., :/flash/file.py)")
 
 
-@repl.command("import")
-@click.argument("module", default="hardwaretest")
-@click.option("--timeout", "-t", default=10, type=int, help="Response timeout in seconds")
 def repl_import(module: str, timeout: int):
     """Import a module and show output/errors.
 
@@ -299,37 +287,34 @@ def repl_import(module: str, timeout: int):
 
     # Stop OpenOCD if running (it blocks USB CDC)
     if ocd.is_running():
-        click.echo("Stopping OpenOCD...")
+        console.echo("Stopping OpenOCD...")
         ocd.stop()
         time.sleep(1)
 
     # Wait for USB CDC device
-    click.echo("Waiting for USB CDC device...")
+    console.echo("Waiting for USB CDC device...")
     for _ in range(10):
         dev = _ser.auto_detect()
         if dev:
             break
         time.sleep(1)
     else:
-        raise click.ClickException("USB CDC device not found. Is miniUSB connected?")
+        raise console.CliError("USB CDC device not found. Is miniUSB connected?")
 
-    click.echo(f"Device: {dev}")
-    click.echo(f"Importing '{module}'...")
-    click.echo()
+    console.echo(f"Device: {dev}")
+    console.echo(f"Importing '{module}'...")
+    console.echo()
 
     try:
         output = repl_backend.exec_code(dev, f"import {module}", _ser.baud, timeout)
         if output:
-            click.echo(output)
+            console.echo(output)
         else:
-            click.secho(f"Module '{module}' imported successfully (no output)", fg="green")
+            console.secho(f"Module '{module}' imported successfully (no output)", fg="green")
     except pyserial.SerialException as e:
-        raise click.ClickException(f"Serial error: {e}")
+        raise console.CliError(f"Serial error: {e}")
 
 
-@repl.command("rm")
-@click.argument("path")
-@click.option("--force", "-f", is_flag=True, help="Don't ask for confirmation")
 def repl_rm(path: str, force: bool):
     """Remove file from board.
 
@@ -340,13 +325,13 @@ def repl_rm(path: str, force: bool):
     """
     dev = _ser.require_device()
     if not force:
-        if not click.confirm(f"Delete {path}?"):
-            click.echo("Aborted")
+        if not console.confirm(f"Delete {path}?"):
+            console.echo("Aborted")
             return
 
     with repl_backend.mpremote_transport(dev, _ser.baud) as transport:
         try:
             transport.fs_rmfile(path)
-            click.secho(f"Removed {path}", fg="green")
+            console.secho(f"Removed {path}", fg="green")
         except Exception as e:
-            raise click.ClickException(f"Error removing {path}: {e}")
+            raise console.CliError(f"Error removing {path}: {e}")

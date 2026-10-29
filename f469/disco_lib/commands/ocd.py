@@ -1,12 +1,11 @@
 """OpenOCD server management commands."""
 
-import click
+from .. import console
 
 from .. import GDB_PORT, OPENOCD_PORT
 from ..ocd_provider import get_ocd
 
 
-@click.group()
 def ocd():
     """OpenOCD server management.
 
@@ -39,31 +38,26 @@ def ocd():
     pass
 
 
-@ocd.command("start")
 def ocd_start():
     """Start OpenOCD server (background)."""
     get_ocd().start()
 
 
-@ocd.command("stop")
 def ocd_stop():
     """Stop OpenOCD server."""
     get_ocd().stop()
 
 
-@ocd.command("status")
 def ocd_status():
     """Check if OpenOCD is running and board connected."""
     if get_ocd().is_running():
-        click.secho("OpenOCD: running", fg="green")
-        click.echo(f"Ports: telnet={OPENOCD_PORT}, gdb={GDB_PORT}")
-        click.echo(get_ocd().send("reg pc sp"))
+        console.secho("OpenOCD: running", fg="green")
+        console.echo(f"Ports: telnet={OPENOCD_PORT}, gdb={GDB_PORT}")
+        console.echo(get_ocd().send("reg pc sp"))
     else:
-        click.secho("OpenOCD: not running", fg="red")
+        console.secho("OpenOCD: not running", fg="red")
 
 
-@ocd.command("cmd")
-@click.argument("command", nargs=-1, required=True)
 def ocd_cmd(command):
     """Send raw OpenOCD command.
 
@@ -76,9 +70,9 @@ def ocd_cmd(command):
     """
     cmd_str = " ".join(command)
     with get_ocd().ensure_running():
-        click.secho(f"> {cmd_str}", fg="cyan")
+        console.secho(f"> {cmd_str}", fg="cyan")
         result = get_ocd().send(cmd_str)
         if result:
-            click.echo(result)
+            console.echo(result)
         else:
-            click.secho("(no output)", fg="yellow")
+            console.secho("(no output)", fg="yellow")

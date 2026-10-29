@@ -2,7 +2,7 @@
 
 import os
 
-import click
+from .. import console
 
 from ..ykush import (
     Ykush,
@@ -29,51 +29,43 @@ def _parse_port(port_str: str | None) -> int | str:
         Port number (1, 2, 3) or 'all'.
 
     Raises:
-        click.BadParameter: If port is invalid.
+        BadParameter: If port is invalid.
     """
     if port_str is None or port_str.lower() in ("all", "a"):
         return "all"
     try:
         port = int(port_str)
         if port not in (1, 2, 3):
-            raise click.BadParameter("Port must be 1, 2, 3, or 'all'")
+            raise console.BadParameter("Port must be 1, 2, 3, or 'all'")
         return port
     except ValueError:
-        raise click.BadParameter("Port must be 1, 2, 3, or 'all'")
+        raise console.BadParameter("Port must be 1, 2, 3, or 'all'")
 
 
 def _print_ykush_unavailable():
     """Print helpful message when YKUSH is not available."""
-    click.secho("YKUSH not available.", fg="red")
-    click.echo()
-    click.echo("To power cycle the board manually:")
-    click.echo("  1. Unplug the USB cables from the board")
-    click.echo("  2. Wait 2-3 seconds")
-    click.echo("  3. Reconnect the cables")
-    click.echo()
-    click.echo("For automated power control, install a YKUSH USB hub:")
-    click.echo("  https://www.yepkit.com/")
+    console.secho("YKUSH not available.", fg="red")
+    console.echo()
+    console.echo("To power cycle the board manually:")
+    console.echo("  1. Unplug the USB cables from the board")
+    console.echo("  2. Wait 2-3 seconds")
+    console.echo("  3. Reconnect the cables")
+    console.echo()
+    console.echo("For automated power control, install a YKUSH USB hub:")
+    console.echo("  https://www.yepkit.com/")
 
 
 def _print_no_devices():
     """Print message when no YKUSH devices found."""
-    click.secho("No YKUSH devices found.", fg="yellow")
-    click.echo()
-    click.echo("Check that:")
-    click.echo("  - YKUSH hub is connected via USB")
-    click.echo("  - USB cable is working")
-    click.echo("  - ykushcmd can see the device: ykushcmd -l")
+    console.secho("No YKUSH devices found.", fg="yellow")
+    console.echo()
+    console.echo("Check that:")
+    console.echo("  - YKUSH hub is connected via USB")
+    console.echo("  - USB cable is working")
+    console.echo("  - ykushcmd can see the device: ykushcmd -l")
 
 
-@click.group()
-@click.option(
-    "--serial",
-    "-s",
-    envvar="YKUSH_SERIAL",
-    help="YKUSH device serial number (or set YKUSH_SERIAL env var)",
-)
-@click.pass_context
-def power(ctx, serial):
+def power():
     """USB power control via YKUSH hub.
 
     Control power to USB devices connected through a YKUSH USB hub.
@@ -88,16 +80,11 @@ def power(ctx, serial):
       disco power on                  # Power up all ports
       disco power --serial YK123 off  # Target specific device
     """
-    ctx.ensure_object(dict)
-    ctx.obj["serial"] = serial
+    pass
 
 
-@power.command("status")
-@click.pass_context
-def power_status(ctx):
+def power_status(serial):
     """Show YKUSH devices and port states."""
-    serial = ctx.obj.get("serial")
-
     try:
         ykush = _get_ykush_instance(serial)
 
@@ -107,41 +94,37 @@ def power_status(ctx):
             _print_no_devices()
             return
 
-        click.secho("=== YKUSH Status ===", fg="blue")
-        click.echo(f"Devices found: {len(devices)}")
-        click.echo()
+        console.secho("=== YKUSH Status ===", fg="blue")
+        console.echo(f"Devices found: {len(devices)}")
+        console.echo()
 
         for dev_serial in devices:
-            click.echo(f"Device: {dev_serial}")
+            console.echo(f"Device: {dev_serial}")
             # Get status for each port
             for port in (1, 2, 3):
                 try:
                     # Create instance for this specific device to get port status
                     dev_ykush = get_ykush(serial=dev_serial)
                     is_on = dev_ykush.get_port_status(port)
-                    status_icon = click.style("ON", fg="green") if is_on else click.style("OFF", fg="red")
-                    click.echo(f"  Port {port}: {status_icon}")
+                    status_icon = console.style("ON", fg="green") if is_on else console.style("OFF", fg="red")
+                    console.echo(f"  Port {port}: {status_icon}")
                 except YkushError:
-                    click.echo(f"  Port {port}: " + click.style("?", fg="yellow"))
-            click.echo()
+                    console.echo(f"  Port {port}: " + console.style("?", fg="yellow"))
+            console.echo()
 
     except YkushNotFoundError:
         _print_ykush_unavailable()
     except YkushNoDevicesError:
         _print_no_devices()
     except YkushError as e:
-        raise click.ClickException(str(e))
+        raise console.CliError(str(e))
 
 
-@power.command("on")
-@click.argument("port", required=False, default=None)
-@click.pass_context
-def power_on(ctx, port):
+def power_on(serial, port):
     """Power up port(s).
 
     PORT can be 1, 2, 3, or 'all' (default: all).
     """
-    serial = ctx.obj.get("serial")
     port_val = _parse_port(port)
 
     try:
@@ -149,31 +132,27 @@ def power_on(ctx, port):
         ykush.select_device()  # Validate device exists
 
         port_desc = "all ports" if port_val == "all" else f"port {port_val}"
-        click.echo(f"Powering on {port_desc}...")
+        console.echo(f"Powering on {port_desc}...")
         result = ykush.power_up(port_val)
         if result:
-            click.echo(result)
-        click.secho(f"Power ON: {port_desc}", fg="green")
+            console.echo(result)
+        console.secho(f"Power ON: {port_desc}", fg="green")
 
     except YkushNotFoundError:
         _print_ykush_unavailable()
     except YkushNoDevicesError:
         _print_no_devices()
     except YkushInvalidPortError as e:
-        raise click.BadParameter(str(e))
+        raise console.BadParameter(str(e))
     except YkushError as e:
-        raise click.ClickException(str(e))
+        raise console.CliError(str(e))
 
 
-@power.command("off")
-@click.argument("port", required=False, default=None)
-@click.pass_context
-def power_off(ctx, port):
+def power_off(serial, port):
     """Power down port(s).
 
     PORT can be 1, 2, 3, or 'all' (default: all).
     """
-    serial = ctx.obj.get("serial")
     port_val = _parse_port(port)
 
     try:
@@ -181,27 +160,23 @@ def power_off(ctx, port):
         ykush.select_device()  # Validate device exists
 
         port_desc = "all ports" if port_val == "all" else f"port {port_val}"
-        click.echo(f"Powering off {port_desc}...")
+        console.echo(f"Powering off {port_desc}...")
         result = ykush.power_down(port_val)
         if result:
-            click.echo(result)
-        click.secho(f"Power OFF: {port_desc}", fg="yellow")
+            console.echo(result)
+        console.secho(f"Power OFF: {port_desc}", fg="yellow")
 
     except YkushNotFoundError:
         _print_ykush_unavailable()
     except YkushNoDevicesError:
         _print_no_devices()
     except YkushInvalidPortError as e:
-        raise click.BadParameter(str(e))
+        raise console.BadParameter(str(e))
     except YkushError as e:
-        raise click.ClickException(str(e))
+        raise console.CliError(str(e))
 
 
-@power.command("cycle")
-@click.argument("port", required=False, default=None)
-@click.option("--delay", "-d", default=2.0, type=float, help="Delay in seconds between off/on (default: 2.0)")
-@click.pass_context
-def power_cycle(ctx, port, delay):
+def power_cycle(serial, port, delay):
     """Power cycle port(s) with delay.
 
     PORT can be 1, 2, 3, or 'all' (default: all).
@@ -210,7 +185,6 @@ def power_cycle(ctx, port, delay):
     Example workflow:
       disco power cycle && sleep 3 && disco ocd start
     """
-    serial = ctx.obj.get("serial")
     port_val = _parse_port(port)
 
     try:
@@ -218,24 +192,24 @@ def power_cycle(ctx, port, delay):
         ykush.select_device()  # Validate device exists
 
         port_desc = "all ports" if port_val == "all" else f"port {port_val}"
-        click.echo(f"Power cycling {port_desc} (delay: {delay}s)...")
-        click.echo("  Power OFF...")
+        console.echo(f"Power cycling {port_desc} (delay: {delay}s)...")
+        console.echo("  Power OFF...")
         ykush.power_down(port_val)
-        click.echo(f"  Waiting {delay}s...")
+        console.echo(f"  Waiting {delay}s...")
         # Note: actual sleep happens in power_cycle, but we call power_down/up
         # separately to show progress
         import time
 
         time.sleep(delay)
-        click.echo("  Power ON...")
+        console.echo("  Power ON...")
         ykush.power_up(port_val)
-        click.secho(f"Power cycle complete: {port_desc}", fg="green")
+        console.secho(f"Power cycle complete: {port_desc}", fg="green")
 
     except YkushNotFoundError:
         _print_ykush_unavailable()
     except YkushNoDevicesError:
         _print_no_devices()
     except YkushInvalidPortError as e:
-        raise click.BadParameter(str(e))
+        raise console.BadParameter(str(e))
     except YkushError as e:
-        raise click.ClickException(str(e))
+        raise console.CliError(str(e))

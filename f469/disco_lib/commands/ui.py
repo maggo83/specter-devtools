@@ -9,7 +9,7 @@ import struct
 import tempfile
 from pathlib import Path
 
-import click
+from .. import console
 
 from ..ocd_provider import get_ocd
 from .. import cpu as cpu_backend
@@ -194,10 +194,10 @@ def _check_lvgl_version(dev, baud):
     try:
         ver = repl_backend.exec_raw(dev, _LVGL_VERSION_CHECK, baud)
     except RuntimeError as e:
-        raise click.ClickException(f"Cannot detect LVGL: {e}")
+        raise console.CliError(f"Cannot detect LVGL: {e}")
     ver = ver.strip()
     if ver != "9":
-        raise click.ClickException(
+        raise console.CliError(
             f"Unsupported LVGL version {ver!r} \u2014 disco ui requires LVGL 9+")
 
 
@@ -357,14 +357,14 @@ print('OK')
 def _parse_streamed_tree(output, layer):
     lines = [line for line in output.splitlines() if line.strip()]
     if not lines:
-        raise click.ClickException("UI tree request returned no response")
+        raise console.CliError("UI tree request returned no response")
 
     nodes = {}
     for line in lines:
         try:
             node = json_mod.loads(line)
         except json_mod.JSONDecodeError as error:
-            raise click.ClickException(
+            raise console.CliError(
                 f"UI tree request returned invalid JSON: {line!r}"
             ) from error
         path = tuple(node.get("path", []))
@@ -374,14 +374,14 @@ def _parse_streamed_tree(output, layer):
 
     root = nodes.get(())
     if root is None:
-        raise click.ClickException("UI tree request did not include a root node")
+        raise console.CliError("UI tree request did not include a root node")
 
     for path, node in nodes.items():
         if not path:
             continue
         parent = nodes.get(path[:-1])
         if parent is None:
-            raise click.ClickException("UI tree request has an orphaned node")
+            raise console.CliError("UI tree request has an orphaned node")
         parent["children"].append(node)
     return {"layer": layer, "root": root}
 
@@ -495,12 +495,12 @@ def _device_request(dev, body, baud, timeout, settle_ms=None, **values):
         try:
             output = repl_backend.exec_raw(dev, script, baud, timeout)
         except RuntimeError as error:
-            raise click.ClickException(str(error))
+            raise console.CliError(str(error))
         lines = [line for line in output.splitlines() if line.strip()]
         try:
             result = json_mod.loads(lines[-1])
         except (IndexError, json_mod.JSONDecodeError) as error:
-            raise click.ClickException(f"Device request failed: {output.strip()}") from error
+            raise console.CliError(f"Device request failed: {output.strip()}") from error
         if result != {"install": True} or attempt:
             return result
         _install_device_modules(dev, baud, timeout)
@@ -522,7 +522,7 @@ def _tree_request(dev, layer, baud, timeout):
     try:
         output = repl_backend.exec_raw(dev, script, baud, timeout)
     except RuntimeError as error:
-        raise click.ClickException(str(error))
+        raise console.CliError(str(error))
     return _parse_streamed_tree(output, layer)
 
 
@@ -536,7 +536,7 @@ def _has_application(dev, baud, timeout):
     try:
         output = repl_backend.exec_raw(dev, "print(%r in globals())" % _APP_GLOBAL, baud, timeout)
     except RuntimeError as error:
-        raise click.ClickException(str(error))
+        raise console.CliError(str(error))
     return output.strip().splitlines()[-1:] == ["True"]
 
 
@@ -544,9 +544,9 @@ def _run_path_script(dev, script, baud, timeout, action):
     try:
         output = repl_backend.exec_raw(dev, script, baud, timeout)
     except RuntimeError as error:
-        raise click.ClickException(str(error))
+        raise console.CliError(str(error))
     if output.strip().splitlines()[-1:] != ["OK"]:
-        raise click.ClickException(f"{action} failed: {output.strip()}")
+        raise console.CliError(f"{action} failed: {output.strip()}")
 
 
 def _generic_control_request(dev, request, baud, timeout):
@@ -650,7 +650,6 @@ def _generic_control_request(dev, request, baud, timeout):
     return {"ok": False, "error": "Unknown action: " + str(action)}
 
 
-@click.group()
 def ui():
     """LVGL remote control. Requires LVGL 9+ firmware.
 
@@ -669,9 +668,6 @@ def ui():
     pass
 
 
-@ui.command("control")
-@click.argument("request_json")
-@click.option("--timeout", "-t", default=10, type=int, help="Response timeout in seconds")
 def ui_control(request_json: str, timeout: int):
     """Send a canonical generic UI-control request to LVGL firmware.
 
@@ -687,22 +683,16 @@ def ui_control(request_json: str, timeout: int):
     try:
         request = json_mod.loads(request_json)
     except json_mod.JSONDecodeError as error:
-        raise click.ClickException(f"Invalid request JSON: {error.msg}") from error
+        raise console.CliError(f"Invalid request JSON: {error.msg}") from error
     if not isinstance(request, dict):
-        raise click.ClickException("Request JSON must be an object")
+        raise console.CliError("Request JSON must be an object")
 
     dev = _ser.require_device()
     _check_lvgl_version(dev, _ser.baud)
     response = _generic_control_request(dev, request, _ser.baud, timeout)
-    click.echo(json_mod.dumps(response, sort_keys=True))
+    console.echo(json_mod.dumps(response, sort_keys=True))
 
 
-@ui.command("screen")
-@click.option("--json", "as_json", is_flag=True, help="Output as JSON tree")
-@click.option("--layer", "layer", default="screen",
-              type=click.Choice(["screen", "top"]),
-              help="Root layer: 'screen' (default) or 'top' (layer_top overlay)")
-@click.option("--timeout", "-t", default=10, type=int, help="Response timeout in seconds")
 def ui_screen(as_json: bool, layer: str, timeout: int):
     """Dump the LVGL widget tree.
 
@@ -726,25 +716,18 @@ def ui_screen(as_json: bool, layer: str, timeout: int):
     try:
         output = repl_backend.exec_raw(dev, script, _ser.baud, timeout)
     except RuntimeError as e:
-        raise click.ClickException(str(e))
+        raise console.CliError(str(e))
 
     if as_json:
         try:
             tree = json_mod.loads(output)
-            click.echo(json_mod.dumps(tree, indent=2))
+            console.echo(json_mod.dumps(tree, indent=2))
         except json_mod.JSONDecodeError:
-            click.echo(output)
+            console.echo(output)
     else:
-        click.echo(output)
+        console.echo(output)
 
 
-@ui.command("click")
-@click.argument("text", required=False, default=None)
-@click.option("--index", "-i", default=None, help="Dot-separated tree path (e.g. 1.0.1.5.2)")
-@click.option("--layer", "layer", default="screen",
-              type=click.Choice(["screen", "top"]),
-              help="Root layer: 'screen' (default) or 'top' (layer_top overlay)")
-@click.option("--timeout", "-t", default=10, type=int, help="Response timeout in seconds")
 def ui_click(text: str, index: str, layer: str, timeout: int):
     """Click a widget by its label text or tree position.
 
@@ -764,9 +747,9 @@ def ui_click(text: str, index: str, layer: str, timeout: int):
       disco ui click --layer top -i 0.2  # click overlay button by index
     """
     if text is None and index is None:
-        raise click.ClickException("Provide TEXT or --index")
+        raise console.CliError("Provide TEXT or --index")
     if text is not None and index is not None:
-        raise click.ClickException("Provide TEXT or --index, not both")
+        raise console.CliError("Provide TEXT or --index, not both")
 
     dev = _ser.require_device()
     _check_lvgl_version(dev, _ser.baud)
@@ -775,7 +758,7 @@ def ui_click(text: str, index: str, layer: str, timeout: int):
         try:
             path = [int(x) for x in index.split(".")]
         except ValueError:
-            raise click.ClickException(
+            raise console.CliError(
                 f"Invalid index path: {index!r} (expected dot-separated integers)")
         script = (
             _CLICK_INDEX_SCRIPT
@@ -794,29 +777,24 @@ def ui_click(text: str, index: str, layer: str, timeout: int):
     try:
         output = repl_backend.exec_raw(dev, script, _ser.baud, timeout)
     except RuntimeError as e:
-        raise click.ClickException(str(e))
+        raise console.CliError(str(e))
 
     lines = output.strip().splitlines()
     result = lines[-1] if lines else ""
     if result == "OK":
         if len(lines) > 1:
-            click.echo("\n".join(lines[:-1]))
-        click.secho(f"Clicked widget at {label}", fg="green")
+            console.echo("\n".join(lines[:-1]))
+        console.secho(f"Clicked widget at {label}", fg="green")
     elif result == "NOT_FOUND":
-        raise click.ClickException(f"No widget found with {label}")
+        raise console.CliError(f"No widget found with {label}")
     elif result.startswith("INDEX_ERROR:"):
         parts = result.split(":")
-        raise click.ClickException(
+        raise console.CliError(
             f"Child index {parts[1]} out of range (parent has {parts[2]} children)")
     else:
-        raise click.ClickException(f"Unexpected response: {output.strip()}")
+        raise console.CliError(f"Unexpected response: {output.strip()}")
 
 
-@ui.command("write")
-@click.argument("text")
-@click.option("--target", "-n", default=0, type=int,
-              help="Index of textarea to target (default: 0)")
-@click.option("--timeout", "-t", default=10, type=int, help="Response timeout in seconds")
 def ui_write(text: str, target: int, timeout: int):
     """Set text on a textarea widget.
 
@@ -835,19 +813,19 @@ def ui_write(text: str, target: int, timeout: int):
     try:
         output = repl_backend.exec_raw(dev, script, _ser.baud, timeout)
     except RuntimeError as e:
-        raise click.ClickException(str(e))
+        raise console.CliError(str(e))
 
     result = output.strip()
     if result == "OK":
-        click.secho(f"Set textarea[{target}] text to \"{text}\"", fg="green")
+        console.secho(f"Set textarea[{target}] text to \"{text}\"", fg="green")
     elif result == "NO_TEXTAREA":
-        raise click.ClickException("No textarea widget found on screen")
+        raise console.CliError("No textarea widget found on screen")
     elif result.startswith("INDEX_OUT_OF_RANGE:"):
         count = result.split(":")[1]
-        raise click.ClickException(
+        raise console.CliError(
             f"Textarea index {target} out of range (found {count} textareas)")
     else:
-        raise click.ClickException(f"Unexpected response: {result}")
+        raise console.CliError(f"Unexpected response: {result}")
 
 
 # --- Screenshot support ---
@@ -866,11 +844,11 @@ def _active_framebuffer_address(ocd) -> int:
     output = memory.read_words(ocd, _LTDC_LAYER1_CFBAR, 1)
     match = re.search(r":\s*([0-9a-fA-F]{8})\b", output)
     if match is None:
-        raise click.ClickException("Could not read LTDC framebuffer address")
+        raise console.CliError("Could not read LTDC framebuffer address")
 
     address = int(match.group(1), 16)
     if address not in _FB_ADDRS:
-        raise click.ClickException(
+        raise console.CliError(
             f"Unexpected LTDC framebuffer address: 0x{address:08x}")
     return address
 
@@ -911,10 +889,6 @@ def _raw_to_png(raw_path: str, png_path: str,
         f.write(_chunk(b"IEND", b""))
 
 
-@ui.command("screenshot")
-@click.argument("output", default="/tmp/screenshot.png", type=click.Path())
-@click.option("--timeout", "-t", default=30, type=int,
-              help="OpenOCD dump timeout in seconds")
 def ui_screenshot(output: str, timeout: int):
     """Capture the display framebuffer and save as a PNG file.
 
@@ -935,21 +909,21 @@ def ui_screenshot(output: str, timeout: int):
         ocd = get_ocd()
         with ocd.ensure_running(), cpu_backend.halted(ocd):
             fb_addr = _active_framebuffer_address(ocd)
-            click.echo(f"Dumping framebuffer (0x{fb_addr:08x}, "
+            console.echo(f"Dumping framebuffer (0x{fb_addr:08x}, "
                        f"{_FB_SIZE:,} bytes)...")
             success = memory.dump_to_file(
                 ocd, tmp_path, fb_addr, _FB_SIZE, timeout=timeout)
             if not success:
-                raise click.ClickException("Failed to dump framebuffer")
+                raise console.CliError("Failed to dump framebuffer")
 
         actual = os.path.getsize(tmp_path)
         if actual != _FB_SIZE:
-            raise click.ClickException(
+            raise console.CliError(
                 f"Unexpected dump size: {actual:,} bytes "
                 f"(expected {_FB_SIZE:,})")
 
         _raw_to_png(tmp_path, output)
-        click.secho(f"Screenshot saved to {output}", fg="green")
+        console.secho(f"Screenshot saved to {output}", fg="green")
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)

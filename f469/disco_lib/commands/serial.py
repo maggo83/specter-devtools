@@ -3,7 +3,7 @@
 import re
 import time
 
-import click
+from .. import console
 
 from ..ocd_provider import get_ocd
 from ..serial import SerialDevice
@@ -30,7 +30,6 @@ def _check_usb_otg_connected() -> bool:
     return False
 
 
-@click.group()
 def serial():
     """Serial/REPL communication.
 
@@ -73,60 +72,54 @@ def serial():
     pass
 
 
-@serial.command("list")
 def serial_list():
     """List available serial devices."""
     _ser.show_devices()
 
 
-@serial.command("test")
 def serial_test():
     """Quick test for serial output (2 sec)."""
-    click.secho("=== Serial Port Test ===", fg="blue")
+    console.secho("=== Serial Port Test ===", fg="blue")
     dev = _ser.require_device()
-    click.echo(f"Testing: {dev} @ {_ser.baud}")
-    click.echo("Waiting 2 seconds for output...")
+    console.echo(f"Testing: {dev} @ {_ser.baud}")
+    console.echo("Waiting 2 seconds for output...")
     output = _ser.read_timeout(dev, 2.0)
     if output:
-        click.echo(output)
+        console.echo(output)
     else:
-        click.echo("(no output received)")
+        console.echo("(no output received)")
 
 
-@serial.command("repl")
-@click.argument("timeout", default=3, type=int)
 def serial_repl(timeout: int):
     """Test REPL connection (default 3s timeout)."""
-    click.secho(f"=== REPL Test ({timeout}s timeout) ===", fg="blue")
+    console.secho(f"=== REPL Test ({timeout}s timeout) ===", fg="blue")
 
     if not _check_usb_otg_connected():
-        click.secho("Warning: USB OTG (microUSB) not detected!", fg="red")
-        click.secho("REPL requires microUSB cable connected to USB OTG port (CN13, bottom of board)", fg="yellow")
-        click.echo()
+        console.secho("Warning: USB OTG (microUSB) not detected!", fg="red")
+        console.secho("REPL requires microUSB cable connected to USB OTG port (CN13, bottom of board)", fg="yellow")
+        console.echo()
 
     dev = _ser.require_device()
-    click.echo(f"Device: {dev}")
-    click.echo("Sending wake-up sequence...")
+    console.echo(f"Device: {dev}")
+    console.echo("Sending wake-up sequence...")
 
     output = _ser.repl_test(dev, timeout)
     if output:
-        click.secho("Response received:", fg="green")
-        click.echo(output)
+        console.secho("Response received:", fg="green")
+        console.echo(output)
         if ">>>" in output:
-            click.secho("REPL prompt detected!", fg="green")
+            console.secho("REPL prompt detected!", fg="green")
     else:
-        click.secho("(no response)", fg="yellow")
+        console.secho("(no response)", fg="yellow")
 
 
-@serial.command("boot")
-@click.argument("timeout", default=5, type=int)
 def serial_boot(timeout: int):
     """Reset board and capture boot output (default 5s)."""
-    click.secho(f"=== Boot Capture ({timeout}s timeout) ===", fg="blue")
+    console.secho(f"=== Boot Capture ({timeout}s timeout) ===", fg="blue")
     dev = _ser.require_device()
 
-    click.echo(f"Device: {dev}")
-    click.echo("Resetting board and capturing output...")
+    console.echo(f"Device: {dev}")
+    console.echo("Resetting board and capturing output...")
 
     with get_ocd().ensure_running():
         cpu_backend.reset_run(get_ocd())
@@ -135,11 +128,10 @@ def serial_boot(timeout: int):
     output = _ser.read_timeout(dev, timeout)
 
     if output:
-        click.echo(output)
-    click.secho("\nCapture complete", fg="green")
+        console.echo(output)
+    console.secho("\nCapture complete", fg="green")
 
 
-@serial.command("console")
 def serial_console():
     """Open interactive serial console (screen)."""
     dev = _ser.require_device()

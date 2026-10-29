@@ -7,7 +7,7 @@ import tempfile
 import zlib
 
 import pytest
-from click.testing import CliRunner
+from disco_lib.testing import CliRunner
 from unittest.mock import patch, MagicMock
 
 from disco_lib.commands.ui import (
@@ -513,7 +513,8 @@ class TestScreenshotResumeCPU:
         with patch("disco_lib.commands.ui.memory.dump_to_file",
                    side_effect=Exception("connection lost")):
             runner = CliRunner()
-            runner.invoke(ui_screenshot, ["/tmp/_test_exc.png"])
+            with pytest.raises(Exception, match="connection lost"):
+                runner.invoke(ui_screenshot, ["/tmp/_test_exc.png"])
         # ocd_mock fixture auto-asserts resumed at teardown
 
 

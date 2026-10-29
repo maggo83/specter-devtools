@@ -11,9 +11,9 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
-import click
 import serial
 
+from . import console
 from .openocd import OpenOCD
 from .serial import SerialDevice
 from .ykush import Ykush, YkushNotFoundError, YkushNoDevicesError, YkushError
@@ -171,7 +171,7 @@ def check_target(ocd: OpenOCD, report: DiagnosticReport) -> bool:
 
         report.target_responding = True
         return True
-    except (OSError, click.ClickException) as e:
+    except (OSError, console.CliError) as e:
         report.add("TARGET_NOT_RESPONDING", Level.ERROR,
                    "JTAG connected but MCU not responding",
                    details=str(e))
@@ -181,7 +181,7 @@ def check_target(ocd: OpenOCD, report: DiagnosticReport) -> bool:
         if we_halted:
             try:
                 ocd.send("resume")
-            except (OSError, click.ClickException):
+            except (OSError, console.CliError):
                 pass  # Best effort
 
 
@@ -194,7 +194,7 @@ def capture_cpu_state(ocd: OpenOCD, report: DiagnosticReport) -> bool:
         result = ocd.send("reg pc")
         pc2 = _parse_reg(result)
         report.was_halted = (pc1 == pc2)
-    except (OSError, click.ClickException):
+    except (OSError, console.CliError):
         report.was_halted = True
 
     ocd.send("halt")
@@ -317,7 +317,7 @@ def check_rdp(ocd: OpenOCD, report: DiagnosticReport):
     try:
         result = ocd.send("flash info 0")
         report.rdp_enabled = is_rdp_enabled(result)
-    except (OSError, click.ClickException):
+    except (OSError, console.CliError):
         report.rdp_enabled = None  # Could not check
 
 
@@ -533,70 +533,70 @@ def print_summary(report: DiagnosticReport, verbose: bool):
     """Print summary to console."""
     def status_icon(ok: bool, warn: bool = False) -> str:
         if ok:
-            return click.style("✓", fg="green")
+            return console.style("✓", fg="green")
         elif warn:
-            return click.style("⚠", fg="yellow")
-        return click.style("✗", fg="red")
+            return console.style("⚠", fg="yellow")
+        return console.style("✗", fg="red")
 
-    click.secho("=== Board Diagnostic Report ===", fg="blue")
-    click.echo()
+    console.secho("=== Board Diagnostic Report ===", fg="blue")
+    console.echo()
 
-    click.echo("Connection:")
-    click.echo(f"  {status_icon(report.openocd_running)} OpenOCD")
+    console.echo("Connection:")
+    console.echo(f"  {status_icon(report.openocd_running)} OpenOCD")
     if report.openocd_running:
-        click.echo(f"  {status_icon(report.target_responding)} Target")
+        console.echo(f"  {status_icon(report.target_responding)} Target")
         if report.rdp_enabled is not None:
             if report.rdp_enabled:
-                click.echo(f"  {click.style('⚠', fg='yellow')} RDP enabled (flash locked)")
+                console.echo(f"  {console.style('⚠', fg='yellow')} RDP enabled (flash locked)")
             else:
-                click.echo(f"  {status_icon(True)} RDP disabled")
-    click.echo(f"  {status_icon(report.usb_cdc_present, not report.usb_cdc_present)} USB CDC")
+                console.echo(f"  {status_icon(True)} RDP disabled")
+    console.echo(f"  {status_icon(report.usb_cdc_present, not report.usb_cdc_present)} USB CDC")
     if report.usb_cdc_present:
-        click.echo(f"  {status_icon(report.repl_responsive, not report.repl_responsive)} REPL")
+        console.echo(f"  {status_icon(report.repl_responsive, not report.repl_responsive)} REPL")
     if report.ykush_available:
         if report.ykush_devices:
-            click.echo(f"  {status_icon(True)} YKUSH ({len(report.ykush_devices)} device(s))")
+            console.echo(f"  {status_icon(True)} YKUSH ({len(report.ykush_devices)} device(s))")
         else:
-            click.echo(f"  {status_icon(False, warn=True)} YKUSH (no devices)")
+            console.echo(f"  {status_icon(False, warn=True)} YKUSH (no devices)")
     else:
-        click.echo(f"  {click.style('-', fg='cyan')} YKUSH (not installed)")
+        console.echo(f"  {console.style('-', fg='cyan')} YKUSH (not installed)")
     if report.usb_subsystem_errors:
-        click.echo(f"  {status_icon(False, warn=True)} USB subsystem errors in dmesg (reset USB bus or reboot)")
+        console.echo(f"  {status_icon(False, warn=True)} USB subsystem errors in dmesg (reset USB bus or reboot)")
 
     if report.target_responding:
-        click.echo()
-        click.echo("CPU:")
+        console.echo()
+        console.echo("CPU:")
         if report.cpu_stuck:
-            click.echo(f"  {status_icon(False)} STUCK at {report.pc:#010x}")
+            console.echo(f"  {status_icon(False)} STUCK at {report.pc:#010x}")
         else:
-            click.echo(f"  {status_icon(True)} PC={report.pc:#010x}")
+            console.echo(f"  {status_icon(True)} PC={report.pc:#010x}")
         if verbose:
-            click.echo(f"     SP={report.sp:#010x} LR={report.lr:#010x}")
+            console.echo(f"     SP={report.sp:#010x} LR={report.lr:#010x}")
 
     if report.cfsr or report.hfsr:
-        click.echo()
-        click.echo("Faults:")
+        console.echo()
+        console.echo("Faults:")
         if report.cfsr:
-            click.echo(f"  CFSR={report.cfsr:#010x}")
+            console.echo(f"  CFSR={report.cfsr:#010x}")
         if report.hfsr:
-            click.echo(f"  HFSR={report.hfsr:#010x}")
+            console.echo(f"  HFSR={report.hfsr:#010x}")
 
     if report.diagnostics:
-        click.echo()
-        click.echo("Issues:")
+        console.echo()
+        console.echo("Issues:")
         for d in report.diagnostics:
             color = "red" if d.level == Level.ERROR else "yellow"
-            click.secho(f"  [{d.level.value}] {d.code}: {d.message}", fg=color)
+            console.secho(f"  [{d.level.value}] {d.code}: {d.message}", fg=color)
             if verbose and d.details:
-                click.echo(f"         {d.details}")
+                console.echo(f"         {d.details}")
 
-    click.echo()
+    console.echo()
     if report.errors:
-        click.secho(f"{report.errors} errors, {report.warnings} warnings", fg="red")
+        console.secho(f"{report.errors} errors, {report.warnings} warnings", fg="red")
     elif report.warnings:
-        click.secho(f"{report.warnings} warnings", fg="yellow")
+        console.secho(f"{report.warnings} warnings", fg="yellow")
     else:
-        click.secho("All checks passed", fg="green")
+        console.secho("All checks passed", fg="green")
 
 
 def run_diagnostics(ocd: OpenOCD, ser: SerialDevice, verbose: bool, no_log: bool):
@@ -613,7 +613,7 @@ def run_diagnostics(ocd: OpenOCD, ser: SerialDevice, verbose: bool, no_log: bool
         print_summary(report, verbose)
         if not no_log:
             log_path = save_log(report, generate_markdown(report))
-            click.echo(f"\nLog: {log_path}")
+            console.echo(f"\nLog: {log_path}")
         return
 
     if not check_target(ocd, report):
@@ -621,7 +621,7 @@ def run_diagnostics(ocd: OpenOCD, ser: SerialDevice, verbose: bool, no_log: bool
         print_summary(report, verbose)
         if not no_log:
             log_path = save_log(report, generate_markdown(report))
-            click.echo(f"\nLog: {log_path}")
+            console.echo(f"\nLog: {log_path}")
         return
 
     needs_resume = capture_cpu_state(ocd, report)
@@ -645,4 +645,4 @@ def run_diagnostics(ocd: OpenOCD, ser: SerialDevice, verbose: bool, no_log: bool
 
     if not no_log:
         log_path = save_log(report, generate_markdown(report))
-        click.echo(f"\nLog: {log_path}")
+        console.echo(f"\nLog: {log_path}")

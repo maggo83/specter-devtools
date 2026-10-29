@@ -4,10 +4,10 @@ import glob
 import os
 import time
 
-import click
 import serial
 
 from . import BAUD_RATE, SERIAL_BLACKLIST
+from . import console
 
 
 class SerialDevice:
@@ -47,7 +47,7 @@ class SerialDevice:
         if env_dev:
             if os.path.exists(env_dev):
                 return env_dev
-            click.secho(f"SERIAL_DEV={env_dev} does not exist", fg="red", err=True)
+            console.secho(f"SERIAL_DEV={env_dev} does not exist", fg="red", err=True)
             return None
 
         # Find first non-blacklisted device
@@ -61,7 +61,7 @@ class SerialDevice:
         """Get serial device or raise exception."""
         dev = self.auto_detect()
         if not dev:
-            raise click.ClickException(
+            raise console.CliError(
                 "No USB modem device found (after filtering blacklist)"
             )
         return dev
@@ -73,7 +73,7 @@ class SerialDevice:
                 data = ser.read(4096)
                 return data.decode("utf-8", errors="replace")
         except serial.SerialException as e:
-            raise click.ClickException(f"Serial error: {e}")
+            raise console.CliError(f"Serial error: {e}")
 
     def repl_test(self, dev: str, timeout: float) -> str | None:
         """Send wake sequence and wait for REPL response.
@@ -92,22 +92,22 @@ class SerialDevice:
                 ser.write(b"\r\n")
 
                 # Read response
-                click.echo(f"Waiting {timeout}s for response...")
+                console.echo(f"Waiting {timeout}s for response...")
                 data = ser.read(4096)
                 return data.decode("utf-8", errors="replace") if data else None
         except serial.SerialException as e:
-            raise click.ClickException(f"Serial error: {e}")
+            raise console.CliError(f"Serial error: {e}")
 
     def exec_console(self, dev: str) -> None:
         """Replace process with screen for interactive console."""
-        click.secho(f"Opening console: {dev} @ {self.baud}", fg="green")
-        click.echo("Press Ctrl-A then K to exit")
+        console.secho(f"Opening console: {dev} @ {self.baud}", fg="green")
+        console.echo("Press Ctrl-A then K to exit")
         os.execvp("screen", ["screen", dev, str(self.baud)])
 
     def show_devices(self) -> None:
         """Display available serial devices."""
-        click.secho("=== Serial Devices ===", fg="blue")
-        click.echo("USB Modem devices (tty.*):")
+        console.secho("=== Serial Devices ===", fg="blue")
+        console.echo("USB Modem devices (tty.*):")
 
         devices = self.list_devices()
         visible = [(p, b) for p, b in devices if not b]
@@ -115,18 +115,18 @@ class SerialDevice:
 
         if visible:
             for path, _ in visible:
-                click.echo(f"  {path}")
+                console.echo(f"  {path}")
         else:
-            click.echo("  (none)")
+            console.echo("  (none)")
 
         if blacklisted_count:
-            click.secho(f"  ({blacklisted_count} blacklisted)", fg="yellow")
+            console.secho(f"  ({blacklisted_count} blacklisted)", fg="yellow")
 
-        click.echo()
-        click.echo("USB Serial devices (tty.usbserial*):")
+        console.echo()
+        console.echo("USB Serial devices (tty.usbserial*):")
         usb_serial = glob.glob("/dev/tty.usbserial*")
         if usb_serial:
             for path in usb_serial:
-                click.echo(f"  {path}")
+                console.echo(f"  {path}")
         else:
-            click.echo("  (none)")
+            console.echo("  (none)")

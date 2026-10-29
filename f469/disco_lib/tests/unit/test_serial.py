@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-import click
+from disco_lib import console
 import pytest
 import serial
 
@@ -233,11 +233,11 @@ class TestReplTest:
         assert ">>>" in result
 
     def test_raises_on_serial_exception(self, mock_serial):
-        """Should raise ClickException on serial error."""
+        """Should raise CliError on serial error."""
         mock_serial.side_effect = serial.SerialException("port busy")
 
         ser = SerialDevice()
-        with pytest.raises(click.ClickException) as exc_info:
+        with pytest.raises(console.CliError) as exc_info:
             ser.repl_test("/dev/tty.test", 3)
 
         assert "Serial error" in str(exc_info.value)
@@ -257,12 +257,12 @@ class TestRequireDevice:
         assert result == "/dev/tty.usbmodem12345"
 
     def test_raises_when_no_device(self, mock_glob, monkeypatch):
-        """Should raise ClickException when no device found."""
+        """Should raise CliError when no device found."""
         monkeypatch.delenv("SERIAL_DEV", raising=False)
         mock_glob.return_value = []
 
         ser = SerialDevice()
-        with pytest.raises(click.ClickException) as exc_info:
+        with pytest.raises(console.CliError) as exc_info:
             ser.require_device()
 
         assert "No USB modem device found" in str(exc_info.value)
@@ -273,7 +273,7 @@ class TestRequireDevice:
         mock_glob.return_value = ["/dev/tty.usbmodem004NTKF123"]
 
         ser = SerialDevice(blacklist=["004NTKF"])
-        with pytest.raises(click.ClickException) as exc_info:
+        with pytest.raises(console.CliError) as exc_info:
             ser.require_device()
 
         assert "blacklist" in str(exc_info.value).lower()
@@ -295,11 +295,11 @@ class TestReadTimeout:
         assert result == "test data"
 
     def test_raises_on_serial_exception(self, mock_serial):
-        """Should raise ClickException on serial error."""
+        """Should raise CliError on serial error."""
         mock_serial.side_effect = serial.SerialException("device disconnected")
 
         ser = SerialDevice()
-        with pytest.raises(click.ClickException) as exc_info:
+        with pytest.raises(console.CliError) as exc_info:
             ser.read_timeout("/dev/tty.test", 1.0)
 
         assert "Serial error" in str(exc_info.value)

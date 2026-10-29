@@ -5,7 +5,7 @@ import subprocess
 import pytest
 from unittest.mock import MagicMock, patch
 
-import click
+from disco_lib import console
 
 from disco_lib.openocd import OpenOCD
 
@@ -122,7 +122,7 @@ class TestSend:
         mock_socket.side_effect = ConnectionRefusedError()
 
         ocd = OpenOCD()
-        with pytest.raises(click.ClickException) as exc_info:
+        with pytest.raises(console.CliError) as exc_info:
             ocd.send("reg pc")
 
         assert "connection failed" in str(exc_info.value).lower()
@@ -132,7 +132,7 @@ class TestSend:
         mock_socket.side_effect = socket.timeout()
 
         ocd = OpenOCD()
-        with pytest.raises(click.ClickException) as exc_info:
+        with pytest.raises(console.CliError) as exc_info:
             ocd.send("reg pc")
 
         assert "connection failed" in str(exc_info.value).lower()
@@ -161,7 +161,7 @@ class TestSend:
 
         mock_sock.recv.side_effect = [BlockingIOError(), b"partial output\n"]
         with patch("disco_lib.openocd.time.monotonic", side_effect=[0, 0, 2]):
-            with pytest.raises(click.ClickException, match="timed out after 1 s"):
+            with pytest.raises(console.CliError, match="timed out after 1 s"):
                 OpenOCD().send("program firmware.bin", timeout=1)
 
     def test_handles_memory_dump_response(self, mock_socket):
@@ -231,7 +231,7 @@ class TestEnsureRunning:
         mock_socket.side_effect = ConnectionRefusedError()
 
         ocd = OpenOCD()
-        with pytest.raises(click.ClickException) as exc_info:
+        with pytest.raises(console.CliError) as exc_info:
             with ocd.ensure_running():
                 pass
 
@@ -304,7 +304,7 @@ class TestStartStop:
         ocd = OpenOCD()
         ocd._process = process
 
-        with pytest.raises(click.ClickException, match="could not be killed within 3 s"):
+        with pytest.raises(console.CliError, match="could not be killed within 3 s"):
             ocd.stop()
 
         process.kill.assert_called_once()
@@ -334,7 +334,7 @@ class TestStartStop:
              patch("disco_lib.openocd.time.sleep"):
             mock_run.return_value.returncode = 0
 
-            with pytest.raises(click.ClickException, match="did not stop within 3 s"):
+            with pytest.raises(console.CliError, match="did not stop within 3 s"):
                 OpenOCD().stop()
 
 

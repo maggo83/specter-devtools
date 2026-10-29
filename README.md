@@ -10,6 +10,11 @@ Shared developer tooling for Specter simulators and hardware targets.
 | `f469/` | STM32F469 Discovery board tool (`disco`): OpenOCD, flash, REPL, LVGL UI control |
 | `simulator/sim_control/` | MicroPython control runtime frozen into the Unix simulator by the parent project |
 
+Both command-line entry points use Python's standard-library `argparse`.
+F469 command implementations are ordinary functions under
+`f469/disco_lib/commands/`; register their public arguments in
+`f469/disco_lib/cli.py`.
+
 Targets:
 
 - `simulator`: TCP control endpoint of a simulator started with `--control`.
@@ -24,10 +29,14 @@ The simulator binary itself stays in the product repository: it is the product's
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r f469/requirements.txt -e .
+.venv/bin/pip install --require-hashes -r f469/requirements.txt
+.venv/bin/pip install --no-build-isolation --no-deps -e .
 ```
 
 `f469/disco` activates this `.venv` automatically. OpenOCD must be installed for flash, CPU, and screenshot commands.
+The exact direct dependencies are declared in `f469/requirements.in`; the
+generated `f469/requirements.txt` also locks and hashes every transitive
+dependency.
 
 ## Usage
 

@@ -1,6 +1,6 @@
 """Quickstart command - AI agent context for disco tool."""
 
-import click
+from .. import console
 
 QUICKSTART_TEXT = """\
 # disco - STM32F469 Discovery Board Tool
@@ -146,12 +146,10 @@ disco repl cp local.py :/main.py
 """
 
 
-@click.command()
-@click.option("--raw", is_flag=True, help="Output without formatting")
 def quickstart(raw: bool):
     """Output AI agent context for disco tool.
 
     Prints command reference and workflows for AI agents.
     Use in Claude Code hooks (SessionStart, PreCompact).
     """
-    click.echo(QUICKSTART_TEXT)
+    console.echo(QUICKSTART_TEXT)

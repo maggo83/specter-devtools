@@ -1,6 +1,6 @@
 """Smart verify judges the internal filesystem separately from firmware code."""
 
-from click.testing import CliRunner
+from disco_lib.testing import CliRunner
 
 from disco_lib import flash as flash_backend
 from disco_lib.commands.flash import flash_verify
