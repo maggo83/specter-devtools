@@ -1,0 +1,5 @@
+mpremote==1.29.0
+pyserial==3.5
+pytest==9.2.0
+pyyaml==6.0.3
+setuptools==84.2.1
