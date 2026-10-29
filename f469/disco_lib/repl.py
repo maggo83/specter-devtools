@@ -1,5 +1,6 @@
 """REPL communication backend."""
 
+import os
 import time
 from contextlib import contextmanager
 
@@ -85,7 +86,7 @@ def exec_code(dev: str, code: str, baud: int = BAUD_RATE, timeout: float = 3.0) 
 
 def hard_reset(dev: str, baud: int = BAUD_RATE, timeout: float = 3.0) -> None:
     """Reset the board like its reset button, via machine.reset() on the REPL."""
-    command = b"import machine; machine.reset()"
+    command = b"import os, machine; os.sync(); machine.reset()"
     reset_sent = False
     try:
         with pyserial.Serial(dev, baud, timeout=timeout) as ser:
@@ -98,13 +99,24 @@ def hard_reset(dev: str, baud: int = BAUD_RATE, timeout: float = 3.0) -> None:
         if not reset_sent:
             raise
         # USB disconnects as the board resets after the command is sent.
-    time.sleep(1)  # let the port go away before anyone waits for the prompt
+    deadline = time.monotonic() + timeout
+    while os.path.exists(dev):
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"REPL did not disconnect within {timeout:g} s")
+        time.sleep(0.05)
 
 
-def wait_for_prompt(find_device, baud: int = BAUD_RATE, timeout: float = 60.0, poll: float = 1.0) -> str:
+def wait_for_prompt(
+    find_device,
+    baud: int = BAUD_RATE,
+    timeout: float = 60.0,
+    poll: float = 1.0,
+    interrupt_running: bool = False,
+) -> str:
     """Wait until the serial port exists and the REPL answers with a prompt.
 
-    Returns the device path; raises TimeoutError.
+    Returns the device path; raises TimeoutError. By default, running code is
+    not interrupted.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -113,8 +125,11 @@ def wait_for_prompt(find_device, baud: int = BAUD_RATE, timeout: float = 60.0, p
             try:
                 with pyserial.Serial(dev, baud, timeout=poll) as ser:
                     ser.reset_input_buffer()
-                    # Ctrl-B, not Ctrl-C: leaves a raw REPL and never interrupts a booting main.py.
-                    ser.write(b"\x02")
+                    if interrupt_running:
+                        ser.write(b"\x03\x02")
+                    else:
+                        # Ctrl-B leaves a raw REPL and never interrupts a booting main.py.
+                        ser.write(b"\x02")
                     if ser.read_until(b">>> ").endswith(b">>> "):
                         return dev
             except (pyserial.SerialException, OSError):

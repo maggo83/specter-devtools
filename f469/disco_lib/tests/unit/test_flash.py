@@ -25,6 +25,7 @@ from disco_lib.flash import (
     read_option_bytes,
     unlock_rdp,
     lock_rdp,
+    program_firmware,
 )
 
 
@@ -368,6 +369,41 @@ class TestGetBuildType:
         assert get_build_type("0100900098") == "unknown"
         assert get_build_type("0100900002") == "unknown"
 
+
+class TestProgramFirmware:
+    """Programming succeeds only with an explicit OpenOCD completion marker."""
+
+    class FakeOpenOCD:
+        def __init__(self, response):
+            self.response = response
+
+        def send(self, command, timeout=2.0):
+            return self.response
+
+    @pytest.mark.parametrize("response", [
+        "** Programming Finished **",
+        "** Verified OK **",
+    ])
+    def test_accepts_completion_marker(self, tmp_path, response):
+        firmware = tmp_path / "firmware.bin"
+        firmware.write_bytes(b"firmware")
+
+        assert program_firmware(
+            self.FakeOpenOCD(response), str(firmware), verify=True
+        )
+
+    @pytest.mark.parametrize("response", [
+        "",
+        "** Programming Started **",
+        "target halted",
+    ])
+    def test_rejects_incomplete_response(self, tmp_path, response):
+        firmware = tmp_path / "firmware.bin"
+        firmware.write_bytes(b"firmware")
+
+        assert not program_firmware(
+            self.FakeOpenOCD(response), str(firmware), verify=True
+        )
 
 class TestDetectFlashAddress:
     """Tests for detect_flash_address() - determines correct flash address.

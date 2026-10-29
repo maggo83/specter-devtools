@@ -282,7 +282,7 @@ def program_firmware(
 
     if "error" in result_lower or "failed" in result_lower:
         return False
-    return True
+    return "programming finished" in result_lower or "verified ok" in result_lower
 
 
 # Internal MicroPython filesystem (FLASH_FS, sectors 2-4): firmware writes it at runtime.

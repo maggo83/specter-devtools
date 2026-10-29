@@ -239,6 +239,14 @@ class TestWaitForPrompt:
         assert repl.wait_for_prompt(lambda: next(devices), timeout=5, poll=0) == "/dev/fake"
         assert written == [b"\x02", b"\x02"]
 
+    def test_can_interrupt_running_main(self, monkeypatch):
+        repl, written = self._serial(monkeypatch, [b"\r\nKeyboardInterrupt\r\n>>> "])
+
+        assert repl.wait_for_prompt(
+            lambda: "/dev/fake", timeout=1, poll=0, interrupt_running=True
+        ) == "/dev/fake"
+        assert written == [b"\x03\x02"]
+
     def test_times_out_when_the_prompt_never_comes(self, monkeypatch):
         repl, _ = self._serial(monkeypatch, [b""])
 
@@ -295,7 +303,10 @@ class TestNoSoftReset:
 
         repl.hard_reset("/dev/fake")
 
-        assert written == [b"\x03\x02", b"import machine; machine.reset()\r\n"]
+        assert written == [
+            b"\x03\x02",
+            b"import os, machine; os.sync(); machine.reset()\r\n",
+        ]
         assert b"\x04" not in b"".join(written)
 
     def test_file_commands_enter_the_raw_repl_without_a_soft_reset(self, monkeypatch):
@@ -323,6 +334,32 @@ class TestNoSoftReset:
             pass
 
         assert calls == [False]
+
+    def test_hard_reset_fails_when_usb_never_disconnects(self, monkeypatch):
+        from disco_lib import repl
+
+        class ConnectedSerial:
+            def __init__(self, dev, baud, timeout):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def write(self, data):
+                pass
+
+            def read_until(self, expected):
+                return expected
+
+        monkeypatch.setattr(repl.pyserial, "Serial", ConnectedSerial)
+        monkeypatch.setattr(repl.os.path, "exists", lambda path: True)
+        monkeypatch.setattr(repl.time, "monotonic", iter([0, 4]).__next__)
+
+        with pytest.raises(TimeoutError, match="REPL did not disconnect within 3 s"):
+            repl.hard_reset("/dev/fake")
 
     def test_reset_command_resets_then_waits(self, monkeypatch):
         import importlib

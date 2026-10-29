@@ -11,12 +11,16 @@ import click
 
 from . import OPENOCD_CFG, OPENOCD_LOG, OPENOCD_PORT
 
+STOP_TIMEOUT = 3.0
+STOP_POLL_INTERVAL = 0.05
+
 
 class OpenOCD:
     """Communicate with OpenOCD via telnet."""
 
     def __init__(self, port: int = OPENOCD_PORT):
         self.port = port
+        self._process = None
 
     def is_running(self) -> bool:
         """Check if OpenOCD is listening."""
@@ -51,25 +55,23 @@ class OpenOCD:
                 # Use short timeout for individual reads, but keep reading until connection closes
                 response = b""
                 sock.settimeout(2.0)  # Short timeout per read
-                deadline = time.time() + timeout
-                consecutive_timeouts = 0
+                deadline = time.monotonic() + timeout
+                completed = False
 
-                while time.time() < deadline:
+                while time.monotonic() < deadline:
                     try:
                         chunk = sock.recv(4096)
                         if not chunk:
                             # Connection closed - command completed
+                            completed = True
                             break
                         response += chunk
-                        consecutive_timeouts = 0  # Reset on successful read
                     except socket.timeout:
-                        consecutive_timeouts += 1
-                        # Allow many consecutive timeouts for slow flash operations
-                        # OpenOCD may pause during large reads/writes
-                        # Only bail early if we've had 10+ timeouts (20s) with some response
-                        if consecutive_timeouts > 10 and len(response) > 0:
-                            break
                         continue
+                if not completed:
+                    raise click.ClickException(
+                        f"OpenOCD command timed out after {timeout:g} s"
+                    )
 
                 # Clean up response
                 text = response.decode("utf-8", errors="replace")
@@ -102,7 +104,7 @@ class OpenOCD:
 
         click.secho("Starting OpenOCD...", fg="blue")
         with open(OPENOCD_LOG, "w") as log:
-            subprocess.Popen(
+            self._process = subprocess.Popen(
                 ["openocd", "-f", OPENOCD_CFG],
                 stdout=log,
                 stderr=log,
@@ -124,12 +126,42 @@ class OpenOCD:
                 click.echo(f.read())
         except FileNotFoundError:
             click.echo(f"(log file {OPENOCD_LOG} not found)")
+        self.stop()
         return False
 
     def stop(self) -> None:
-        """Stop OpenOCD."""
+        """Stop OpenOCD and wait until its command endpoint is gone."""
+        if self._process is not None:
+            process = self._process
+            try:
+                process.terminate()
+                process.wait(timeout=STOP_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                click.secho(
+                    "OpenOCD did not stop after SIGTERM; killing it",
+                    fg="yellow",
+                )
+                process.kill()
+                try:
+                    process.wait(timeout=STOP_TIMEOUT)
+                except subprocess.TimeoutExpired as error:
+                    raise click.ClickException(
+                        f"OpenOCD could not be killed within {STOP_TIMEOUT:g} s"
+                    ) from error
+            finally:
+                self._process = None
+            click.secho("OpenOCD stopped", fg="green")
+            return
+
         result = subprocess.run(["pkill", "-x", "openocd"], capture_output=True)
         if result.returncode == 0:
+            deadline = time.monotonic() + STOP_TIMEOUT
+            while self.is_running():
+                if time.monotonic() >= deadline:
+                    raise click.ClickException(
+                        f"OpenOCD did not stop within {STOP_TIMEOUT:g} s"
+                    )
+                time.sleep(STOP_POLL_INTERVAL)
             click.secho("OpenOCD stopped", fg="green")
         else:
             click.secho("OpenOCD not running", fg="yellow")

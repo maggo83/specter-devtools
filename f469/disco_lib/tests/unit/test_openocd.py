@@ -1,6 +1,7 @@
 """Tests for openocd.py backend."""
 
 import socket
+import subprocess
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -117,7 +118,7 @@ class TestSend:
         assert "reg pc" not in lines or "0x08000000" in lines[0]
 
     def test_raises_on_connection_error(self, mock_socket):
-        """Should raise ClickException on connection failure."""
+        """Should raise CliError on connection failure."""
         mock_socket.side_effect = ConnectionRefusedError()
 
         ocd = OpenOCD()
@@ -127,7 +128,7 @@ class TestSend:
         assert "connection failed" in str(exc_info.value).lower()
 
     def test_raises_on_timeout(self, mock_socket):
-        """Should raise ClickException on timeout."""
+        """Should raise CliError on timeout."""
         mock_socket.side_effect = socket.timeout()
 
         ocd = OpenOCD()
@@ -135,6 +136,33 @@ class TestSend:
             ocd.send("reg pc")
 
         assert "connection failed" in str(exc_info.value).lower()
+
+    def test_waits_through_read_timeouts_until_command_completes(self, mock_socket):
+        """Should keep waiting while a long OpenOCD command is silent."""
+        mock_sock = MagicMock()
+        mock_socket.return_value = mock_sock
+        mock_sock.__enter__.return_value = mock_sock
+        mock_sock.recv.side_effect = [
+            BlockingIOError(),
+            socket.timeout(),
+            socket.timeout(),
+            b"result\n",
+            b"",
+        ]
+
+        assert OpenOCD().send("program firmware.bin", timeout=5) == "result"
+
+    def test_reports_command_deadline_without_connection_close(self, mock_socket):
+        """Should not return partial output as a successful command."""
+        mock_sock = MagicMock()
+        mock_socket.return_value = mock_sock
+        mock_sock.__enter__.return_value = mock_sock
+        mock_sock.recv.side_effect = [BlockingIOError()]
+
+        mock_sock.recv.side_effect = [BlockingIOError(), b"partial output\n"]
+        with patch("disco_lib.openocd.time.monotonic", side_effect=[0, 0, 2]):
+            with pytest.raises(click.ClickException, match="timed out after 1 s"):
+                OpenOCD().send("program firmware.bin", timeout=1)
 
     def test_handles_memory_dump_response(self, mock_socket):
         """Should correctly parse memory dump output."""
@@ -190,14 +218,15 @@ class TestEnsureRunning:
         mock_socket.side_effect = mock_connect
 
         ocd = OpenOCD()
-        with patch("disco_lib.openocd.time.sleep"):
+        with patch("disco_lib.openocd.time.sleep"), patch.object(ocd, "stop") as mock_stop:
             with patch("builtins.open", MagicMock()):
                 with ocd.ensure_running():
                     # Should have called start() which calls Popen
                     assert mock_subprocess.Popen.called
+        mock_stop.assert_called_once()
 
     def test_raises_when_start_fails(self, mock_socket, mock_subprocess):
-        """Should raise ClickException when start fails."""
+        """Should raise CliError when start fails."""
         # Always return connection refused (start fails)
         mock_socket.side_effect = ConnectionRefusedError()
 
@@ -240,9 +269,52 @@ class TestStartStop:
         call_args = mock_subprocess.Popen.call_args
         assert "openocd" in call_args[0][0]
 
-    def test_stop_kills_openocd(self):
-        """Should call pkill to stop openocd."""
+    def test_stop_waits_for_the_process_it_started(self):
+        """Should terminate and reap an OpenOCD process started by this instance."""
+        process = MagicMock()
+        ocd = OpenOCD()
+        ocd._process = process
+
         with patch("disco_lib.openocd.subprocess.run") as mock_run:
+            ocd.stop()
+
+        process.terminate.assert_called_once()
+        process.wait.assert_called_once_with(timeout=3.0)
+        process.kill.assert_not_called()
+        mock_run.assert_not_called()
+        assert ocd._process is None
+
+    def test_stop_kills_owned_process_after_terminate_timeout(self):
+        """Should kill an owned OpenOCD process that ignores SIGTERM."""
+        process = MagicMock()
+        process.wait.side_effect = [subprocess.TimeoutExpired("openocd", 3), None]
+        ocd = OpenOCD()
+        ocd._process = process
+
+        ocd.stop()
+
+        process.kill.assert_called_once()
+        assert process.wait.call_count == 2
+        assert ocd._process is None
+
+    def test_stop_reports_owned_process_kill_timeout(self):
+        """Should report an owned OpenOCD process that cannot be killed."""
+        process = MagicMock()
+        process.wait.side_effect = subprocess.TimeoutExpired("openocd", 3)
+        ocd = OpenOCD()
+        ocd._process = process
+
+        with pytest.raises(click.ClickException, match="could not be killed within 3 s"):
+            ocd.stop()
+
+        process.kill.assert_called_once()
+        assert ocd._process is None
+
+    def test_stop_kills_openocd(self):
+        """Should call pkill and wait for the endpoint to disappear."""
+        with patch("disco_lib.openocd.subprocess.run") as mock_run, \
+             patch.object(OpenOCD, "is_running", side_effect=[True, True, False]), \
+             patch("disco_lib.openocd.time.sleep") as mock_sleep:
             mock_run.return_value.returncode = 0
 
             ocd = OpenOCD()
@@ -252,6 +324,18 @@ class TestStartStop:
             call_args = mock_run.call_args[0][0]
             assert "pkill" in call_args
             assert "openocd" in call_args
+            assert mock_sleep.call_count == 2
+
+    def test_stop_fails_if_endpoint_remains_available(self):
+        """Should report a shutdown that never completes."""
+        with patch("disco_lib.openocd.subprocess.run") as mock_run, \
+             patch.object(OpenOCD, "is_running", return_value=True), \
+             patch("disco_lib.openocd.time.monotonic", side_effect=[0, 0, 4]), \
+             patch("disco_lib.openocd.time.sleep"):
+            mock_run.return_value.returncode = 0
+
+            with pytest.raises(click.ClickException, match="did not stop within 3 s"):
+                OpenOCD().stop()
 
 
 class TestStartDoesNotHalt:
