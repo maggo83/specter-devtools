@@ -44,6 +44,9 @@ disco
 │   ├── erase       # Mass erase (dangerous!)
 │   ├── verify      # Verify against file
 │   ├── read        # Read flash to file
+│   ├── qspi
+│   │   ├── info       # Probe external QSPI
+│   │   └── program    # Replace and verify complete external QSPI
 │   ├── info        # Show flash bank info
 │   ├── analyze     # Analyze firmware layout
 │   ├── identify    # Identify build type

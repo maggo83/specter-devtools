@@ -62,6 +62,50 @@ def flash_info():
         console.echo(flash_backend.read_info(get_ocd()))
 
 
+def flash_qspi():
+    """External QSPI flash commands."""
+    pass
+
+
+def flash_qspi_info():
+    """Probe the external QSPI flash without modifying it."""
+    with get_ocd().ensure_running():
+        try:
+            info = flash_backend.probe_qspi(get_ocd())
+        finally:
+            cpu_backend.reset_run(get_ocd())
+    console.secho("=== External QSPI Flash ===", fg="blue")
+    console.echo(f"Device: {info['name']}")
+    console.echo(f"Size: {info['size']:,} bytes")
+
+
+def flash_qspi_program(file: str, timeout: int):
+    """Erase, program, and verify the complete external QSPI flash."""
+    file = os.path.abspath(file)
+    console.secho("=== Programming External QSPI Flash ===", fg="blue")
+    console.echo(f"File: {file}")
+    console.echo(f"Size: {os.path.getsize(file):,} bytes")
+    console.secho(
+        "This replaces every file currently stored in /qspi.",
+        fg="yellow",
+        bold=True,
+    )
+    try:
+        with get_ocd().ensure_running():
+            info = flash_backend.program_qspi(get_ocd(), file, timeout)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise console.CliError(str(error)) from error
+    console.secho(
+        f"Programmed and verified {info['name']} ({info['size']:,} bytes).",
+        fg="green",
+    )
+    if info["retries"]:
+        console.secho(
+            f"Recovered {info['retries']} transient QSPI transfer failures.",
+            fg="yellow",
+        )
+
+
 def flash_identify(file: str):
     """Identify firmware build type (debug vs production).
 

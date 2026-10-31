@@ -25,7 +25,9 @@ from disco_lib.flash import (
     read_option_bytes,
     unlock_rdp,
     lock_rdp,
+    probe_qspi,
     program_firmware,
+    program_qspi,
 )
 
 
@@ -404,6 +406,162 @@ class TestProgramFirmware:
         assert not program_firmware(
             self.FakeOpenOCD(response), str(firmware), verify=True
         )
+
+
+class TestQspiProgramming:
+    class FakeOpenOCD:
+        def __init__(self, responses):
+            self.responses = responses
+            self.commands = []
+
+        def send(self, command, timeout=2.0):
+            self.commands.append(command)
+            if command in self.responses:
+                response = self.responses[command]
+                return response.pop(0) if isinstance(response, list) else response
+            for prefix, response in self.responses.items():
+                if prefix.endswith(" ") and command.startswith(prefix):
+                    return (
+                        response.pop(0)
+                        if isinstance(response, list)
+                        else response
+                    )
+            return ""
+
+    def test_probe_reports_name_and_size(self):
+        ocd = self.FakeOpenOCD({
+            "flash probe 2": (
+                "flash1 'micron n25q128' id = 0x18ba20 "
+                "size = 16384 KiB"
+            ),
+        })
+
+        assert probe_qspi(ocd) == {
+            "name": "micron n25q128",
+            "size": 16 * 1024 * 1024,
+        }
+        assert ocd.commands[:2] == ["reset init", "flash probe 2"]
+
+    def test_program_requires_a_whole_device_image(self, tmp_path):
+        image = tmp_path / "qspi.img"
+        image.write_bytes(b"\xff")
+        ocd = self.FakeOpenOCD({
+            "flash probe 2": "flash1 'micron' size = 16384 KiB",
+        })
+
+        with pytest.raises(ValueError, match="device is 16777216 bytes"):
+            program_qspi(ocd, str(image))
+
+        assert ocd.commands[-2:] == ["reset run", "adapter speed 2000"]
+
+    def test_program_erases_writes_verifies_and_resets(self, tmp_path):
+        image = tmp_path / "qspi.img"
+        image.write_bytes(b"\xff" * 1024)
+        erase = "flash erase_sector 2 0 last"
+        ocd = self.FakeOpenOCD({
+            "flash probe 2": "flash1 'test qspi' size = 1 KiB",
+            erase: "erased sectors 0 through 0 on flash bank 2",
+            "flash write_bank 2 ": "wrote 1024 bytes from file",
+            "flash verify_bank 2 ": "contents match",
+        })
+
+        assert program_qspi(ocd, str(image), timeout=5)["name"] == "test qspi"
+        assert ocd.commands[:4] == [
+            "reset init",
+            "flash probe 2",
+            "adapter speed 500",
+            erase,
+        ]
+        assert ocd.commands[4].startswith("flash write_bank 2 {")
+        assert ocd.commands[4].endswith(" 0")
+        assert ocd.commands[5].startswith("flash verify_bank 2 {")
+        assert ocd.commands[5].endswith(" 0")
+        assert ocd.commands[-2:] == [
+            "reset run",
+            "adapter speed 2000",
+        ]
+
+    def test_program_failure_still_resets(self, tmp_path):
+        image = tmp_path / "qspi.img"
+        image.write_bytes(b"\xff" * 1024)
+        erase = "flash erase_sector 2 0 last"
+        ocd = self.FakeOpenOCD({
+            "flash probe 2": "flash1 'test qspi' size = 1 KiB",
+            erase: "erased sectors 0 through 0 on flash bank 2",
+            "flash write_bank 2 ": "Error: write failed",
+        })
+
+        with pytest.raises(RuntimeError, match="programming failed"):
+            program_qspi(ocd, str(image), timeout=5)
+
+        assert ocd.commands[-2:] == ["reset run", "adapter speed 2000"]
+
+    def test_program_splits_image_into_flash_sector_chunks(self, tmp_path):
+        image = tmp_path / "qspi.img"
+        image.write_bytes(b"\xff" * (128 * 1024))
+        ocd = self.FakeOpenOCD({
+            "flash probe 2": "flash1 'test qspi' size = 128 KiB",
+            "flash erase_sector 2 0 last": "erased sectors 0 through 1",
+            "flash write_bank 2 ": "wrote 65536 bytes from file",
+            "flash verify_bank 2 ": "contents match",
+        })
+
+        program_qspi(ocd, str(image), timeout=5)
+
+        writes = [
+            command
+            for command in ocd.commands
+            if command.startswith("flash write_bank 2 ")
+        ]
+        verifies = [
+            command
+            for command in ocd.commands
+            if command.startswith("flash verify_bank 2 ")
+        ]
+        assert [command.rsplit(" ", 1)[1] for command in writes] == [
+            "0",
+            "65536",
+        ]
+        assert [command.rsplit(" ", 1)[1] for command in verifies] == [
+            "0",
+            "65536",
+        ]
+
+    def test_program_reinitializes_and_retries_transient_chunk_failure(
+        self, tmp_path
+    ):
+        image = tmp_path / "qspi.img"
+        image.write_bytes(b"\xff" * 1024)
+        ocd = self.FakeOpenOCD({
+            "flash probe 2": "flash1 'test qspi' size = 1 KiB",
+            "flash erase_sector 2 0 last": "erased sectors 0 through 0",
+            "flash write_bank 2 ": [
+                "Error: target communication failed",
+                "wrote 1024 bytes from file",
+            ],
+            "flash verify_bank 2 ": "contents match",
+        })
+
+        info = program_qspi(ocd, str(image), timeout=5)
+
+        assert info["retries"] == 1
+        assert ocd.commands.count("reset init") == 2
+
+    def test_program_reinitializes_before_ninth_chunk(self, tmp_path):
+        image = tmp_path / "qspi.img"
+        image.write_bytes(b"\xff" * (9 * 64 * 1024))
+        ocd = self.FakeOpenOCD({
+            "flash probe 2": "flash1 'test qspi' size = 576 KiB",
+            "flash erase_sector 2 0 last": "erased sectors 0 through 8",
+            "flash write_bank 2 ": "wrote 65536 bytes from file",
+            "flash verify_bank 2 ": "contents match",
+        })
+
+        info = program_qspi(ocd, str(image), timeout=5)
+
+        assert info["retries"] == 0
+        assert ocd.commands.count("reset init") == 2
+
 
 class TestDetectFlashAddress:
     """Tests for detect_flash_address() - determines correct flash address.

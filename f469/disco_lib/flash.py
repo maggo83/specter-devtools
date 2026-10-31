@@ -3,11 +3,135 @@
 import hashlib
 import os
 import re
+import tempfile
 from typing import List, Tuple, Dict, Any
 
 from . import diagnostics
 from .openocd import OpenOCD
 from .serial import SerialDevice
+
+QSPI_BANK = 2
+QSPI_CHUNK_SIZE = 64 * 1024
+QSPI_REINITIALIZE_AFTER_CHUNKS = 8
+QSPI_MAX_CHUNK_ATTEMPTS = 3
+QSPI_ADAPTER_SPEED_KHZ = 500
+DEFAULT_ADAPTER_SPEED_KHZ = 2000
+
+
+def _tcl_path(filepath: str) -> str:
+    filepath = os.path.abspath(filepath)
+    if "{" in filepath or "}" in filepath:
+        raise ValueError("OpenOCD paths must not contain braces")
+    return "{" + filepath + "}"
+
+
+def _openocd_failed(result: str) -> bool:
+    result_lower = result.lower()
+    return "error" in result_lower or "failed" in result_lower
+
+
+def probe_qspi(ocd: OpenOCD) -> Dict[str, int | str]:
+    """Initialize and identify the board's external QSPI flash."""
+    ocd.send("reset init", timeout=10)
+    result = ocd.send(f"flash probe {QSPI_BANK}", timeout=10)
+    if _openocd_failed(result):
+        raise RuntimeError("QSPI probe failed: " + result)
+
+    match = re.search(
+        r"flash\d+\s+'([^']+)'.*?size\s*=\s*(\d+)\s+KiB",
+        result,
+        re.IGNORECASE,
+    )
+    if match is None:
+        raise RuntimeError("OpenOCD did not report the QSPI device size: " + result)
+    return {
+        "name": match.group(1),
+        "size": int(match.group(2)) * 1024,
+    }
+
+
+def _initialize_qspi_transfer(ocd: OpenOCD) -> Dict[str, int | str]:
+    info = probe_qspi(ocd)
+    ocd.send(f"adapter speed {QSPI_ADAPTER_SPEED_KHZ}", timeout=10)
+    return info
+
+
+def program_qspi(ocd: OpenOCD, filepath: str, timeout: int = 0) -> Dict[str, int | str]:
+    """Erase, program, and verify the complete external QSPI device."""
+    filepath = os.path.abspath(filepath)
+    image_size = os.path.getsize(filepath)
+    try:
+        info = _initialize_qspi_transfer(ocd)
+        if image_size != info["size"]:
+            raise ValueError(
+                f"QSPI image is {image_size} bytes, device is {info['size']} bytes"
+            )
+
+        if timeout == 0:
+            timeout = max(300, int(image_size / (40 * 1024)) + 120)
+
+        erase_result = ocd.send(
+            f"flash erase_sector {QSPI_BANK} 0 last",
+            timeout=timeout,
+        )
+        if _openocd_failed(erase_result):
+            raise RuntimeError("QSPI erase failed: " + erase_result)
+
+        with tempfile.TemporaryDirectory(prefix="disco-qspi-") as temporary_dir:
+            chunk_path = os.path.join(temporary_dir, "chunk.bin")
+            with open(filepath, "rb") as image:
+                offset = 0
+                chunk_index = 0
+                retries = 0
+                while True:
+                    chunk = image.read(QSPI_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    if (
+                        chunk_index > 0
+                        and chunk_index % QSPI_REINITIALIZE_AFTER_CHUNKS == 0
+                    ):
+                        _initialize_qspi_transfer(ocd)
+                    with open(chunk_path, "wb") as chunk_file:
+                        chunk_file.write(chunk)
+                    chunk_tcl_path = _tcl_path(chunk_path)
+
+                    for attempt in range(QSPI_MAX_CHUNK_ATTEMPTS):
+                        write_result = ocd.send(
+                            f"flash write_bank {QSPI_BANK} "
+                            f"{chunk_tcl_path} {offset}",
+                            timeout=timeout,
+                        )
+                        if not _openocd_failed(write_result):
+                            verify_result = ocd.send(
+                                f"flash verify_bank {QSPI_BANK} "
+                                f"{chunk_tcl_path} {offset}",
+                                timeout=timeout,
+                            )
+                            if (
+                                not _openocd_failed(verify_result)
+                                and "contents match" in verify_result.lower()
+                            ):
+                                break
+                            error = "verification failed: " + verify_result
+                        else:
+                            error = "programming failed: " + write_result
+
+                        if attempt + 1 == QSPI_MAX_CHUNK_ATTEMPTS:
+                            raise RuntimeError(
+                                f"QSPI {error} at 0x{offset:08x}"
+                            )
+                        retries += 1
+                        _initialize_qspi_transfer(ocd)
+                    offset += len(chunk)
+                    chunk_index += 1
+        info["retries"] = retries
+        return info
+    finally:
+        try:
+            ocd.send("reset run", timeout=10)
+        finally:
+            ocd.send(f"adapter speed {DEFAULT_ADAPTER_SPEED_KHZ}", timeout=10)
 
 
 def _is_blank_chunk(chunk: bytes) -> bool:

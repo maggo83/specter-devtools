@@ -249,6 +249,34 @@ def _add_flash(commands):
         "reset",
         "timeout",
     )
+    _, qspi_commands = _group(
+        subcommands,
+        "qspi",
+        flash_commands.flash_qspi,
+        ["flash", "qspi"],
+    )
+    parser = _parser(
+        qspi_commands,
+        "info",
+        flash_commands.flash_qspi_info,
+        ["flash", "qspi", "info"],
+    )
+    _bind(parser, flash_commands.flash_qspi_info)
+    parser = _parser(
+        qspi_commands,
+        "program",
+        flash_commands.flash_qspi_program,
+        ["flash", "qspi", "program"],
+    )
+    parser.add_argument("file", type=_existing_path)
+    parser.add_argument(
+        "--timeout",
+        "-t",
+        default=0,
+        type=int,
+        help="Timeout in seconds (0=auto based on size)",
+    )
+    _bind(parser, flash_commands.flash_qspi_program, "file", "timeout")
     _add_fingerprint(subcommands)
 
 

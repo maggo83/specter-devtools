@@ -26,7 +26,7 @@ def ocd():
     Connection details:
       - Telnet port: 4444 (for manual commands)
       - GDB port: 3333 (for GDB debugging)
-      - Config: board/stm32f469discovery.cfg
+      - Config: board/stm32f469i-disco.cfg
       - Log file: /tmp/openocd.log
 
     \b
