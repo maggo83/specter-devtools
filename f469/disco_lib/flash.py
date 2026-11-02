@@ -56,7 +56,12 @@ def _initialize_qspi_transfer(ocd: OpenOCD) -> Dict[str, int | str]:
     return info
 
 
-def program_qspi(ocd: OpenOCD, filepath: str, timeout: int = 0) -> Dict[str, int | str]:
+def program_qspi(
+    ocd: OpenOCD,
+    filepath: str,
+    timeout: int = 0,
+    reset: bool = True,
+) -> Dict[str, int | str]:
     """Erase, program, and verify the complete external QSPI device."""
     filepath = os.path.abspath(filepath)
     image_size = os.path.getsize(filepath)
@@ -81,15 +86,18 @@ def program_qspi(ocd: OpenOCD, filepath: str, timeout: int = 0) -> Dict[str, int
             chunk_path = os.path.join(temporary_dir, "chunk.bin")
             with open(filepath, "rb") as image:
                 offset = 0
-                chunk_index = 0
+                programmed_chunks = 0
                 retries = 0
                 while True:
                     chunk = image.read(QSPI_CHUNK_SIZE)
                     if not chunk:
                         break
+                    if chunk.count(0xFF) == len(chunk):
+                        offset += len(chunk)
+                        continue
                     if (
-                        chunk_index > 0
-                        and chunk_index % QSPI_REINITIALIZE_AFTER_CHUNKS == 0
+                        programmed_chunks > 0
+                        and programmed_chunks % QSPI_REINITIALIZE_AFTER_CHUNKS == 0
                     ):
                         _initialize_qspi_transfer(ocd)
                     with open(chunk_path, "wb") as chunk_file:
@@ -124,12 +132,13 @@ def program_qspi(ocd: OpenOCD, filepath: str, timeout: int = 0) -> Dict[str, int
                         retries += 1
                         _initialize_qspi_transfer(ocd)
                     offset += len(chunk)
-                    chunk_index += 1
+                    programmed_chunks += 1
         info["retries"] = retries
         return info
     finally:
         try:
-            ocd.send("reset run", timeout=10)
+            if reset:
+                ocd.send("reset run", timeout=10)
         finally:
             ocd.send(f"adapter speed {DEFAULT_ADAPTER_SPEED_KHZ}", timeout=10)
 
@@ -455,7 +464,12 @@ def _regions_match(ocd: OpenOCD, filepath: str, addr: int, regions: List[Tuple[i
     return True
 
 
-def verify_regions(ocd: OpenOCD, filepath: str, addr: int = 0x08000000) -> Dict[str, bool | None]:
+def verify_regions(
+    ocd: OpenOCD,
+    filepath: str,
+    addr: int = 0x08000000,
+    resume: bool = True,
+) -> Dict[str, bool | None]:
     """Compare flash with the file's code regions; the filesystem is judged separately.
 
     Returns {"code": bool, "fs": bool | None}; "fs" is None when the file has no
@@ -470,7 +484,8 @@ def verify_regions(ocd: OpenOCD, filepath: str, addr: int = 0x08000000) -> Dict[
         code_ok = _regions_match(ocd, filepath, addr, outside)
         fs_ok = _regions_match(ocd, filepath, addr, inside) if inside else None
     finally:
-        ocd.send("resume")
+        if resume:
+            ocd.send("resume")
     return {"code": code_ok, "fs": fs_ok}
 
 

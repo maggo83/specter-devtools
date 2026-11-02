@@ -456,7 +456,7 @@ class TestQspiProgramming:
 
     def test_program_erases_writes_verifies_and_resets(self, tmp_path):
         image = tmp_path / "qspi.img"
-        image.write_bytes(b"\xff" * 1024)
+        image.write_bytes(b"\x00" + b"\xff" * 1023)
         erase = "flash erase_sector 2 0 last"
         ocd = self.FakeOpenOCD({
             "flash probe 2": "flash1 'test qspi' size = 1 KiB",
@@ -483,7 +483,7 @@ class TestQspiProgramming:
 
     def test_program_failure_still_resets(self, tmp_path):
         image = tmp_path / "qspi.img"
-        image.write_bytes(b"\xff" * 1024)
+        image.write_bytes(b"\x00" + b"\xff" * 1023)
         erase = "flash erase_sector 2 0 last"
         ocd = self.FakeOpenOCD({
             "flash probe 2": "flash1 'test qspi' size = 1 KiB",
@@ -498,7 +498,7 @@ class TestQspiProgramming:
 
     def test_program_splits_image_into_flash_sector_chunks(self, tmp_path):
         image = tmp_path / "qspi.img"
-        image.write_bytes(b"\xff" * (128 * 1024))
+        image.write_bytes(b"\x00" * (128 * 1024))
         ocd = self.FakeOpenOCD({
             "flash probe 2": "flash1 'test qspi' size = 128 KiB",
             "flash erase_sector 2 0 last": "erased sectors 0 through 1",
@@ -527,11 +527,47 @@ class TestQspiProgramming:
             "65536",
         ]
 
+    def test_program_skips_chunks_that_are_already_erased(self, tmp_path):
+        image = tmp_path / "qspi.img"
+        image.write_bytes(
+            b"\x00"
+            + b"\xff" * (2 * 64 * 1024 - 1)
+            + b"\x00"
+            + b"\xff" * (64 * 1024 - 1)
+        )
+        ocd = self.FakeOpenOCD({
+            "flash probe 2": "flash1 'test qspi' size = 192 KiB",
+            "flash erase_sector 2 0 last": "erased sectors 0 through 2",
+            "flash write_bank 2 ": "wrote 65536 bytes from file",
+            "flash verify_bank 2 ": "contents match",
+        })
+
+        program_qspi(ocd, str(image), timeout=5)
+
+        writes = [
+            command
+            for command in ocd.commands
+            if command.startswith("flash write_bank 2 ")
+        ]
+        verifies = [
+            command
+            for command in ocd.commands
+            if command.startswith("flash verify_bank 2 ")
+        ]
+        assert [command.rsplit(" ", 1)[1] for command in writes] == [
+            "0",
+            str(2 * 64 * 1024),
+        ]
+        assert [command.rsplit(" ", 1)[1] for command in verifies] == [
+            "0",
+            str(2 * 64 * 1024),
+        ]
+
     def test_program_reinitializes_and_retries_transient_chunk_failure(
         self, tmp_path
     ):
         image = tmp_path / "qspi.img"
-        image.write_bytes(b"\xff" * 1024)
+        image.write_bytes(b"\x00" + b"\xff" * 1023)
         ocd = self.FakeOpenOCD({
             "flash probe 2": "flash1 'test qspi' size = 1 KiB",
             "flash erase_sector 2 0 last": "erased sectors 0 through 0",
@@ -549,10 +585,13 @@ class TestQspiProgramming:
 
     def test_program_reinitializes_before_ninth_chunk(self, tmp_path):
         image = tmp_path / "qspi.img"
-        image.write_bytes(b"\xff" * (9 * 64 * 1024))
+        image.write_bytes(
+            b"\xff" * (8 * 64 * 1024)
+            + b"\x00" * (9 * 64 * 1024)
+        )
         ocd = self.FakeOpenOCD({
-            "flash probe 2": "flash1 'test qspi' size = 576 KiB",
-            "flash erase_sector 2 0 last": "erased sectors 0 through 8",
+            "flash probe 2": "flash1 'test qspi' size = 1088 KiB",
+            "flash erase_sector 2 0 last": "erased sectors 0 through 16",
             "flash write_bank 2 ": "wrote 65536 bytes from file",
             "flash verify_bank 2 ": "contents match",
         })

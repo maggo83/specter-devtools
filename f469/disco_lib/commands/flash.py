@@ -79,7 +79,7 @@ def flash_qspi_info():
     console.echo(f"Size: {info['size']:,} bytes")
 
 
-def flash_qspi_program(file: str, timeout: int):
+def flash_qspi_program(file: str, timeout: int, reset=True):
     """Erase, program, and verify the complete external QSPI flash."""
     file = os.path.abspath(file)
     console.secho("=== Programming External QSPI Flash ===", fg="blue")
@@ -92,7 +92,12 @@ def flash_qspi_program(file: str, timeout: int):
     )
     try:
         with get_ocd().ensure_running():
-            info = flash_backend.program_qspi(get_ocd(), file, timeout)
+            info = flash_backend.program_qspi(
+                get_ocd(),
+                file,
+                timeout,
+                reset=reset,
+            )
     except (OSError, RuntimeError, ValueError) as error:
         raise console.CliError(str(error)) from error
     console.secho(
@@ -104,6 +109,70 @@ def flash_qspi_program(file: str, timeout: int):
             f"Recovered {info['retries']} transient QSPI transfer failures.",
             fg="yellow",
         )
+    return info
+
+
+def _reset_board():
+    with get_ocd().ensure_running():
+        cpu_backend.reset_run(get_ocd())
+
+
+def _preflight_qspi_image(file):
+    file = os.path.abspath(file)
+    image_size = os.path.getsize(file)
+    with get_ocd().ensure_running():
+        info = flash_backend.probe_qspi(get_ocd())
+    if image_size != info["size"]:
+        raise console.CliError(
+            f"QSPI image is {image_size} bytes, device is {info['size']} bytes"
+        )
+    return info
+
+
+def flash_install(
+    firmware: str,
+    qspi: str,
+    addr: str | None,
+    force: bool,
+    firmware_timeout: int,
+    qspi_timeout: int,
+):
+    """Program and verify internal firmware and QSPI as one installation.
+
+    Both files and the detected QSPI size are checked before either flash is
+    modified. Internal flash is programmed first without resetting the board.
+    QSPI is then erased, programmed, and verified before the board is reset.
+    """
+    firmware = os.path.abspath(firmware)
+    qspi = os.path.abspath(qspi)
+    console.secho("=== Installing Firmware and QSPI Image ===", fg="blue")
+    console.echo(f"Firmware: {firmware}")
+    console.echo(f"QSPI: {qspi}")
+    console.secho(
+        "This replaces the internal firmware and every file currently stored in /qspi.",
+        fg="yellow",
+        bold=True,
+    )
+
+    _preflight_qspi_image(qspi)
+    flash_program(
+        firmware,
+        addr,
+        force,
+        verify=True,
+        reset=False,
+        timeout=firmware_timeout,
+    )
+    try:
+        flash_qspi_program(qspi, qspi_timeout, reset=False)
+    except console.CliError as error:
+        raise console.CliError(
+            "Internal firmware was programmed, but QSPI installation failed: "
+            + str(error)
+        ) from error
+
+    _reset_board()
+    console.secho("Firmware and QSPI installation complete!", fg="green")
 
 
 def flash_identify(file: str):
@@ -501,9 +570,8 @@ def flash_program(file: str, addr: str | None, force: bool, verify: bool, reset:
 
     \b
     Note on verification:
-      OpenOCD's built-in verify compares byte-by-byte, which may fail on
-      files with zeros between code. After programming, use
-      'disco flash verify --smart' for accurate verification.
+      Files with zero preservation gaps are verified automatically with
+      region-aware reads instead of OpenOCD's strict byte-by-byte comparison.
     """
     file = os.path.abspath(file)
     size = os.path.getsize(file)
@@ -540,19 +608,44 @@ def flash_program(file: str, addr: str | None, force: bool, verify: bool, reset:
         console.secho("Data preservation: YES", fg="yellow")
         console.echo("  Zeros between code regions - existing data preserved.")
         if verify:
-            console.secho("  Note: OpenOCD verify may report mismatch (expected).", fg="yellow")
+            console.echo("  Verification: region-aware.")
     console.echo()
 
     console.secho("Programming in progress (this may take a while)...", fg="yellow")
 
     with get_ocd().ensure_running():
-        success = flash_backend.program_firmware(get_ocd(), file, addr_int, verify, reset, timeout)
+        if verify and internal_zeros:
+            try:
+                success = flash_backend.program_firmware(
+                    get_ocd(),
+                    file,
+                    addr_int,
+                    verify=False,
+                    reset=False,
+                    timeout=timeout,
+                )
+                if success:
+                    result = flash_backend.verify_regions(
+                        get_ocd(),
+                        file,
+                        addr_int,
+                        resume=False,
+                    )
+                    success = result["code"] and result["fs"] is not False
+            finally:
+                if reset:
+                    cpu_backend.reset_run(get_ocd())
+        else:
+            success = flash_backend.program_firmware(
+                get_ocd(),
+                file,
+                addr_int,
+                verify,
+                reset,
+                timeout,
+            )
 
     if success:
         console.secho("Programming complete!", fg="green")
-        if verify and internal_zeros:
-            console.echo()
-            console.secho("OpenOCD verify may have failed on zero regions.", fg="yellow")
-            console.echo("Run 'disco flash verify --smart' to verify code regions only.")
-    else:
-        console.secho("Programming status unclear - check output above", fg="yellow")
+        return
+    raise console.CliError("Internal firmware programming or verification failed")

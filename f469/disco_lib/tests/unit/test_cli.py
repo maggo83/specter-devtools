@@ -34,6 +34,7 @@ EXPECTED_COMMAND_TREE = {
         "read": None,
         "verify": None,
         "program": None,
+        "install": None,
         "qspi": {"info": None, "program": None},
         "fingerprint": {"create": None, "update": None, "test": None},
     },
@@ -127,6 +128,15 @@ def test_important_command_defaults_are_preserved(tmp_path, monkeypatch):
         (
             ["flash", "qspi", "program", str(firmware)],
             {"timeout": 0},
+        ),
+        (
+            ["flash", "install", str(firmware), str(firmware)],
+            {
+                "addr": None,
+                "force": False,
+                "firmware_timeout": 0,
+                "qspi_timeout": 0,
+            },
         ),
         (["serial", "repl"], {"timeout": 3}),
         (["serial", "boot"], {"timeout": 5}),

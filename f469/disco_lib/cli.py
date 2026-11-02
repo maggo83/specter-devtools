@@ -249,6 +249,37 @@ def _add_flash(commands):
         "reset",
         "timeout",
     )
+    parser = _parser(subcommands, "install", flash_commands.flash_install, ["flash", "install"])
+    parser.add_argument("firmware", type=_existing_path)
+    parser.add_argument("qspi", type=_existing_path)
+    parser.add_argument("--addr", help="Internal flash address (auto-detected if not specified)")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force --addr even if it conflicts with auto-detected",
+    )
+    parser.add_argument(
+        "--firmware-timeout",
+        default=0,
+        type=int,
+        help="Internal flash timeout in seconds (0=auto based on size)",
+    )
+    parser.add_argument(
+        "--qspi-timeout",
+        default=0,
+        type=int,
+        help="QSPI timeout in seconds (0=auto based on size)",
+    )
+    _bind(
+        parser,
+        flash_commands.flash_install,
+        "firmware",
+        "qspi",
+        "addr",
+        "force",
+        "firmware_timeout",
+        "qspi_timeout",
+    )
     _, qspi_commands = _group(
         subcommands,
         "qspi",

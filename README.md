@@ -56,16 +56,23 @@ specter-devtools --target simulator explore /tmp/screens
 specter-devtools --target f469 board flash analyze firmware.bin
 specter-devtools --target f469 board flash qspi info
 specter-devtools --target f469 board flash qspi program qspi_fs.img
+specter-devtools --target f469 board flash install firmware.bin qspi_fs.img
 ```
 
 `request`, `screenshot`, and `capture` return the same JSON shapes on every target; use `capabilities` to discover differences. The shortcuts `click`, `tap`, `long-press`, `drag`, `tree`, and `labels` work on every target; clicks and gestures go through a virtual LVGL pointer, like a real finger, and reply once the UI has settled (`wait` does only that). `state`, `goto`, `back`, `set`, and `explore` need MockUI's application state, on the simulator or on a board running MockUI firmware. `board` passes raw commands to the board tool. See [docs/control-contract.md](docs/control-contract.md) for all requests and target differences.
 
 `board flash qspi program` erases, programs, and verifies the complete external
 QSPI device through ST-Link and OpenOCD. The image size must exactly match the
-detected flash size. It transfers and verifies one flash sector at a time,
-periodically reinitializes QSPI, and retries a failed sector at most twice.
-Recovered failures are reported. This operation replaces every file stored in
-`/qspi`.
+detected flash size. After erasing the full device, it transfers and verifies
+only chunks that differ from the erased `0xFF` state. It periodically
+reinitializes QSPI and retries a failed chunk at most twice. Recovered failures
+are reported. This operation replaces every file stored in `/qspi`.
+
+`board flash install` checks both files and the detected QSPI size before
+modifying either flash. It programs and verifies internal flash without a
+reset, then erases, programs, and verifies QSPI, and resets after both succeed.
+If QSPI fails after internal flash succeeds, it reports that the board has a
+partial installation and must not be treated as ready.
 
 ## Tests
 
