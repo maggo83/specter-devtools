@@ -158,7 +158,10 @@ class TestExecCode:
     """exec_code must return as soon as the REPL prompt comes back."""
 
     @pytest.mark.parametrize("after_interrupt", [b"\r\n>>> ", b"old\r\n>>> \r\n>>> "])
-    def test_returns_output_without_waiting_for_timeout(self, monkeypatch, after_interrupt):
+    @pytest.mark.parametrize(("printed", "expected"), [(b"42\r\n", "42"), (b"", "")])
+    def test_returns_output_without_waiting_for_timeout(
+        self, monkeypatch, after_interrupt, printed, expected
+    ):
         from disco_lib import repl
 
         class FakeSerial:
@@ -177,7 +180,7 @@ class TestExecCode:
                 if data == b"\x03":
                     self.pending += after_interrupt
                 else:
-                    self.pending += data + b"42\r\n>>> "
+                    self.pending += data + printed + b">>> "
 
             def read_until(self, expected):
                 end = self.pending.index(expected) + len(expected)
@@ -188,7 +191,7 @@ class TestExecCode:
                 raise AssertionError("fixed-size reads wait for the full timeout")
 
         monkeypatch.setattr(repl.pyserial, "Serial", FakeSerial)
-        assert repl.exec_code("/dev/fake", "print(6*7)") == "42"
+        assert repl.exec_code("/dev/fake", "print(6*7)") == expected
 
 
 class TestWaitForPrompt:
